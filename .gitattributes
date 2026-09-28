@@ -1,0 +1,7 @@
+# Shell scripts and .env must keep Unix line endings even when this repo is
+# checked out on Windows -- bash (Cloud Shell or Git Bash) fails on a \r at the
+# end of every line with "$'\r': command not found".
+*.sh        text eol=lf
+.env        text eol=lf
+Dockerfile  text eol=lf
+*.json      text eol=lf

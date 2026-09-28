@@ -1,0 +1,18 @@
+# The image needs only code. Footage, results and history stay out -- they would
+# add hundreds of MB to every build upload and to every job's image pull.
+.git
+clips/
+work/
+jobs/
+bucket/
+notebooks/
+masks/
+cloud/
+*.mp4
+*.mov
+*.avi
+*.mkv
+**/__pycache__
+*.pyc
+.env
+.venv

@@ -1,0 +1,57 @@
+{
+  "taskGroups": [
+    {
+      "taskSpec": {
+        "runnables": [
+          {
+            "container": {
+              "imageUri": "YOUR_IMAGE_URI",
+              "commands": ["YOUR_ARGS"],
+              "options": "--shm-size=2g"
+            }
+          }
+        ],
+        "computeResource": {
+          "cpuMilli": 4000,
+          "memoryMib": 14000
+        },
+        "maxRunDuration": "YOUR_MAX_RUN_DURATION",
+        "maxRetryCount": 3,
+        "lifecyclePolicies": [
+          {
+            "action": "RETRY_TASK",
+            "actionCondition": { "exitCodes": [50001] }
+          }
+        ],
+        "environment": {
+          "variables": {}
+        },
+        "volumes": [
+          {
+            "gcs": {
+              "remotePath": "YOUR_BUCKET_PATH"
+            },
+            "mountPath": "/mnt/disks/share"
+          }
+        ]
+      },
+      "taskCount": 1,
+      "parallelism": 1
+    }
+  ],
+  "allocationPolicy": {
+    "instances": [
+      {
+        "policy": {
+          "machineType": "n2-standard-4",
+          "provisioningModel": "STANDARD",
+          "bootDisk": { "sizeGb": 64 }
+        }
+      }
+    ]
+  },
+  "labels": {},
+  "logsPolicy": {
+    "destination": "CLOUD_LOGGING"
+  }
+}

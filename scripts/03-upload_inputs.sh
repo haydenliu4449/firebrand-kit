@@ -1,0 +1,57 @@
+#!/usr/bin/env bash
+# Push inputs up to the bucket: footage, masks, and your review decisions.
+#
+#   bash scripts/03-upload_inputs.sh              # clips/ + masks/ + reject lists
+#   bash scripts/03-upload_inputs.sh /path/clips  # footage from somewhere else
+#
+# Uploading is free. rsync only sends files that are new or changed, so re-run
+# it freely -- after a dropped connection, or after writing more reject.txt files.
+#
+# What goes where:
+#   clips/*.mp4                   -> <bucket>/clips/
+#   masks/*.json                  -> <bucket>/masks/
+#   work/clips/<clip>/reject.txt  -> <bucket>/work/clips/<clip>/reject.txt
+#
+# Nothing else under work/ is uploaded: the bucket's copy of work/ is the one
+# the jobs write, and this script never overwrites it.
+
+source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
+need_gcloud
+
+CLIPS_DIR="${1:-${ROOT_DIR}/clips}"
+
+if [[ -d "${CLIPS_DIR}" ]]; then
+  n=$(find "${CLIPS_DIR}" -maxdepth 1 -type f | grep -Eic "${VIDEO_RE}" || true)
+  bold "Footage: ${n} video file(s) in ${CLIPS_DIR} -> ${GCS_ROOT}/clips/"
+  if [[ "${n}" -gt 0 ]]; then
+    # Only video files; README.md and friends stay behind.
+    gc storage rsync "${CLIPS_DIR}" "${GCS_ROOT}/clips" --exclude='(?i)^(?!.*\.(mp4|avi|mov|mkv|m4v)$).*'
+  fi
+else
+  warn "No clips folder at ${CLIPS_DIR} -- skipping footage."
+fi
+
+if [[ -d "${ROOT_DIR}/masks" ]]; then
+  bold "Masks: ${ROOT_DIR}/masks/*.json -> ${GCS_ROOT}/masks/"
+  gc storage rsync "${ROOT_DIR}/masks" "${GCS_ROOT}/masks" --exclude='(?i)^(?!.*\.json$).*'
+  if [[ ! -f "${ROOT_DIR}/masks/${MASK}" ]]; then
+    warn "  MASK=${MASK} in .env but masks/${MASK} does not exist locally."
+    warn "  Jobs will fall back to masking only the burned-in overlays."
+  fi
+fi
+
+shopt -s nullglob
+rejects=("${ROOT_DIR}"/work/clips/*/reject.txt)
+if (( ${#rejects[@]} )); then
+  bold "Review decisions: ${#rejects[@]} reject.txt file(s)"
+  for f in "${rejects[@]}"; do
+    clip=$(basename "$(dirname "${f}")")
+    ids=$(tr ',\r\n' '   ' < "${f}" | wc -w | tr -d ' ')
+    gc storage cp "${f}" "${GCS_ROOT}/work/clips/${clip}/reject.txt" --quiet
+    echo "  ${clip}: ${ids} track(s) rejected"
+  done
+fi
+
+echo
+bold "In the bucket now:"
+gc storage ls "${GCS_ROOT}/clips/" "${GCS_ROOT}/masks/" 2>/dev/null | sed 's/^/  /' | head -40

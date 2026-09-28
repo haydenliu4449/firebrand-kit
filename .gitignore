@@ -1,0 +1,25 @@
+# footage: lives in clips/ locally and in the bucket, never in git
+clips/*
+!clips/README.md
+*.mp4
+*.mov
+*.avi
+*.mkv
+
+# results: produced by run_all.py locally, or pulled from the bucket by
+# scripts/05-gcs_sync.sh
+work/
+runs/
+bucket/
+
+# rendered Batch job files (a record of what ran; regenerate any time)
+jobs/
+
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+.firebrand_cache/
+.venv/
+
+# NOTE: this used to ignore *.json, which silently kept masks/*.json -- and
+# now templates/*.json, the Batch job templates -- out of the repo.

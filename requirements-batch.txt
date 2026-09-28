@@ -1,0 +1,15 @@
+# What the Cloud Batch image installs (see Dockerfile). Your laptop uses
+# requirements.txt instead.
+#
+# torch from PyPI already bundles the CUDA 12.8 runtime and cuDNN, so the base
+# image only has to supply the driver hooks -- Batch mounts the driver itself
+# (installGpuDrivers in the job JSON). CUDA 12.8 needs driver >= 570; the L4
+# machines Batch provisioned for the lab's gcp-example ran 580.
+torch==2.8.0
+
+# headless: no GUI libraries in a container, and it bundles its own FFmpeg for
+# VideoCapture. make_mask.py (the one GUI tool) runs on your laptop, not here.
+opencv-python-headless>=4.9,<5
+numpy>=1.26,<3
+scipy>=1.11
+pandas>=2.1

@@ -1,0 +1,22 @@
+# What `gcloud builds submit` leaves out of the upload to Cloud Build. Without
+# this file gcloud falls back to .gitignore, which still sends the 6 MB mask
+# PNGs, notebooks and anything else untracked-but-not-ignored. The image only
+# needs the code (see Dockerfile), so send only that.
+.gcloudignore
+.git
+.gitignore
+clips/
+work/
+jobs/
+bucket/
+notebooks/
+masks/
+cloud/
+*.mp4
+*.mov
+*.avi
+*.mkv
+**/__pycache__
+*.pyc
+.env
+.venv
