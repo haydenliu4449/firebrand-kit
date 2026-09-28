@@ -122,7 +122,7 @@ adapted to this pipeline, plus `00-setup.sh` (one-time) and `06-jobs.sh`
 |---|---|
 | `.env` (copy of `.env.example`) | project, bucket, region, image name, machine types |
 | `Dockerfile` | the image every job runs: CUDA base, torch, OpenCV, ffmpeg, this kit |
-| `batch_entry.py` | the container's entrypoint: maps the bucket paths, runs `run_all.py`, saves the log |
+| `batch_entry.py` | what every job runs: maps the bucket paths, runs `run_all.py`, saves the log |
 | `templates/job.gpu.template.json`, `job.cpu.template.json` | Batch job templates (GPU for smoke/train/tag, CPU for detect/tiles) |
 | `scripts/render_job.py` | fills a template for one step; the list of steps lives here |
 | `jobs/` | every job file that was submitted, kept as a record of what ran |
@@ -237,16 +237,15 @@ mkdir -p bucket/clips bucket/masks && cp clips/clip5.mp4 bucket/clips/ && cp mas
 FB_SHARE=./bucket python batch_entry.py run --stage detect --max-frames 60
 ```
 
-### Two things in the lab template worth knowing
+### Two things worth knowing about the lab template
 
-These matter if you reuse gcp-example for something else. The kit already
-handles both.
-
-- **The job's `commands` are appended to the image's `ENTRYPOINT`, not
-  substituted for it.** The template sets `ENTRYPOINT python hardware_info.py`
-  *and* repeats `python hardware_info.py --input ...` in `commands`, so the
-  container runs the script with its own path as extra arguments. Here the
-  entrypoint is `batch_entry.py` and `commands` holds arguments only.
+- **Spell out the whole command in the job, not just arguments.** This kit's
+  first version relied on the image's `ENTRYPOINT` and put only arguments in
+  the job's `commands` (`["smoke"]`). Batch ran `smoke` as the program and the
+  task failed in under a second with exit code 127. The lab template repeats
+  `python hardware_info.py` in `commands`, and that is the right instinct. The
+  kit now sets `entrypoint` to `/opt/venv/bin/python` and `commands` to
+  `["/app/batch_entry.py", ...]` in every job.
 - **`IMAGE_NAME` and `IMAGE_TAG` in `.env` never reach the job.** The template
   hard-codes `gcp-example:latest` and the renderer only substitutes the
   location, project and repository. `render_job.py` fills the whole image URI.

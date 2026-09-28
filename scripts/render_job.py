@@ -64,7 +64,13 @@ def render(step, name, tasks=1, extra=(), hours=None, provisioning=None):
     spec = tg["taskSpec"]
     c = spec["runnables"][0]["container"]
     c["imageUri"] = env("IMAGE_URI")
-    c["commands"] = list(s["args"]) + list(extra)
+    # The whole command line is spelled out in the job rather than left to the
+    # image's ENTRYPOINT: with only arguments in `commands`, Batch ran the first
+    # argument ("smoke") as the program and the task died with exit 127.
+    # `entrypoint` + full `commands` works whichever way Batch treats the
+    # image's own ENTRYPOINT.
+    c["entrypoint"] = "/opt/venv/bin/python"
+    c["commands"] = ["/app/batch_entry.py"] + list(s["args"]) + list(extra)
 
     spec["maxRunDuration"] = f"{int(float(hours or s['hours']) * 3600)}s"
     spec["environment"]["variables"].update({

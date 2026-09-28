@@ -40,7 +40,8 @@ COPY run_all.py run_pipeline.py batch_entry.py /app/
 RUN chmod -R a+rX /app \
     && python -c "import firebrand, cv2, torch, scipy, pandas; print('image ok: torch', torch.__version__, 'cuda', torch.version.cuda, 'opencv', cv2.__version__)"
 
-# The job's `commands` are appended to this, so they are arguments only:
-#   ["smoke"]   or   ["run", "--stage", "detect"]
+# For local `docker run IMAGE run --stage detect`. Batch jobs do NOT rely on
+# this: the job JSON sets `entrypoint` and the full command explicitly (see
+# scripts/render_job.py), because Batch ran args-only `commands` as the program.
 ENTRYPOINT ["/opt/venv/bin/python", "/app/batch_entry.py"]
 CMD ["smoke"]

@@ -23,11 +23,12 @@ laid out like the bucket:
 
     FB_SHARE=./bucket python batch_entry.py run --stage detect --max-frames 60
 
-Why the arguments are passed this way: the image's ENTRYPOINT is this script,
-and Batch APPENDS the job's `commands` to the ENTRYPOINT rather than replacing
-it. The lab's gcp-example sets an ENTRYPOINT *and* repeats the program in
-`commands`, so its job actually runs `hardware_info.py python hardware_info.py
---input ...` -- keep `commands` to arguments only.
+How the job calls this: the job JSON sets `entrypoint` to the venv's python
+and `commands` to ["/app/batch_entry.py", <mode>, <args>...]. Do not rely on
+the image's ENTRYPOINT on Batch. A job that passed only the arguments
+(`commands: ["smoke"]`) failed with exit 127 because Batch tried to run
+"smoke" as the program. The lab's gcp-example avoids this by spelling out the
+whole command in `commands`, and so does this kit.
 """
 from __future__ import annotations
 

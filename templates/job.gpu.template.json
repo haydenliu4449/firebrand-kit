@@ -6,7 +6,8 @@
           {
             "container": {
               "imageUri": "YOUR_IMAGE_URI",
-              "commands": ["YOUR_ARGS"],
+              "entrypoint": "/opt/venv/bin/python",
+              "commands": ["/app/batch_entry.py", "YOUR_ARGS"],
               "options": "--shm-size=4g"
             }
           }
