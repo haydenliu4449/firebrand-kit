@@ -190,7 +190,7 @@ def main():
 
     tracks = T.link(dets, cfg.track, step_ratio=ratio)
     acc = T.accept(tracks, cfg.track)
-    rej = T.rejected(tracks, acc)
+    rej = T.rejected(tracks, acc, cfg.track)
     print(f"  {len(tracks)} tracks -> {len(acc)} accepted, {len(rej)} rejected")
 
     # ---- manual rejections ----------------------------------------------

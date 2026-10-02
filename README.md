@@ -37,8 +37,14 @@ of camera shake. Ground truth exact by construction.
 
 ```
                               raw detector          after tracking       tracks
-shipped defaults          P=1.00  R=0.75         P=1.00  R=0.45      recall 0.62, frag 1.12, 0 ID switches
+shipped defaults          P=1.00  R=0.74         P=1.00  R=0.70      recall 0.62, frag 1.25, 2 ID switches
+before 2026-09-28         P=1.00  R=0.74         P=1.00  R=0.45      recall 0.54, frag 1.14, 0 ID switches
 ```
+
+The 2026-09-28 change (see "If the tags miss firebrands" below) cuts a track at
+one bad link instead of discarding all of it, and loosens the heading and
+brightness rules. Precision is unchanged; the cost is a little fragmentation
+and two ID switches on this benchmark.
 
 Reproduce with `python tests/benchmark.py --ablate --channels`.
 
@@ -190,6 +196,116 @@ do.
 
 You can also look at the results without downloading anything: open the bucket
 in the Cloud Console and click a contact-sheet PNG.
+
+### Viewing and evaluating the tags
+
+After `tag`, each clip has `work/tags/<clip>/` in the bucket: `tracks.csv` (one
+row per firebrand track, with a ballistic-fit residual), `detections.csv` (one
+row per detection: position, streak length and angle, brightness), `labels/`
+(YOLO boxes), `candidates.csv` (model detections that did not make it into a
+track) and, if the job ran with `-- --overlay`, `overlay.mp4`: green boxes are
+tagged firebrands, thin yellow boxes are detections the tracker dropped.
+
+There are three levels of checking, cheapest first:
+
+1. **Synthetic score** (from the `train` step): `bash scripts/05-gcs_sync.sh results`
+   prints track recall and precision for the model and the classical detector
+   on held-out synthetic embers, where the ground truth is exact.
+2. **Physics check, no labels needed:** `ballistic_rms_px` in each `tracks.csv`.
+   A track that is really two embers joined together can't be fitted by one
+   parabola. Sort by that column and look at the worst ones.
+3. **Real footage, against your own review:** `evaluate_tags.py`.
+
+```bash
+bash scripts/05-gcs_sync.sh review     # classical tracks (your reject.txt stays as it is)
+bash scripts/05-gcs_sync.sh tags       # the model's tags
+pip install opencv-python-headless scipy pandas     # once, if this machine lacks them
+python evaluate_tags.py --clips gs://BUCKET/clips --overlay   # or --clips clips/ on your laptop
+```
+
+It compares the model's tracks with the ones you verified: the classical
+detector's tracks minus the IDs in your `reject.txt`. Two tracks count as the
+same ember when at least half of one's detections match the other's within
+5 px. Every model track is then:
+
+| bin | meaning |
+|---|---|
+| confirmed | matches a track you verified: a true positive |
+| known false | matches a track you *rejected*: a false positive |
+| model-only | matches nothing the classical detector kept: either an ember it missed (why the model exists) or a new false positive |
+
+`work/eval/summary.csv` gets, per clip: **recall** (how many verified tracks
+the model recovered), **precision**, fragmentation, and the ballistic residual.
+Precision is a range until you look at the model-only bin. Review
+`work/eval/<clip>/model_only/sheet_*.png` like the detect review, put the IDs
+that are NOT firebrands in `work/tags/<clip>/reject.txt`, and run it again. The
+range becomes one number, and the rest of the bin is counted as new finds.
+`work/eval/<clip>/missed/` shows the verified embers the model lost.
+`overlay.mp4` colours every detection: green found by both, orange model only,
+red missed by the model.
+
+In Cloud Shell, open PNGs in the editor (the pencil icon) and fetch a video
+with `cloudshell download work/eval/clip5/overlay.mp4`.
+
+Only frames both runs covered are compared. If detect ran with
+`--max-frames 300` and tag ran on the whole clip, that's the first 300 frames.
+
+### If the tags miss firebrands
+
+No false positives but many misses means something is too strict. Measured on
+40 frames of clip5 (4K), before the 2026-09-28 change:
+
+- **The tracker threw away more than it kept.** 181 tracks accepted, 311
+  coherent tracks of 3 to 16 frames rejected. 193 of those failed the
+  brightness rule. In a dense ember storm the linker hops from a bright
+  firebrand onto a faint streak next to it, and one bad link discarded the
+  whole firebrand. 118 failed the heading rule, 106 of them for a single bend of
+  27 to 31 degrees. The rejected tracks held the bright, wide embers
+  (brightness p90 112 against 51 for accepted tracks, width p90 15 px against
+  8 px), which are the ones you notice missing.
+- **So the model never learned bright firebrands.** The training generator is
+  fitted to the accepted tracks, and its brightness range stopped at about 80.
+- **Pixel limits were tuned at 1080p.** At 4K the length, area and step caps
+  were half (or a quarter) of what they should be. This mattered less (0.4% of
+  candidates).
+
+Fixed in the code: tracks are cut at a bad link and the pieces judged
+separately (`track.split_bad_links`), the heading limit is 35° and the whole-track
+brightness ratio 10, pixel limits scale with the frame width, and the
+generator's brightness range extends to what the footage contains (every
+coherent track, not only accepted ones). On clip5 the classical detector now
+keeps 421 tracks instead of 181, and the added ones looked like embers on the
+contact sheets. These are code changes, so rebuild the image first:
+
+```bash
+bash scripts/01-build_and_push.sh
+# 1. quick look, no retraining: the existing model with the new tracker
+bash scripts/04-submit_job.sh tag -- --force --overlay
+# 2. the real fix: more (and brighter) verified tracks -> a model that has seen them
+bash scripts/04-submit_job.sh detect -- --force --max-frames 300
+rm work/clips/*/reject.txt             # old IDs -- they do not match the new tracks
+bash scripts/05-gcs_sync.sh review     # new contact sheets; write new reject.txt files
+bash scripts/03-upload_inputs.sh
+bash scripts/04-submit_job.sh train -- --force
+bash scripts/04-submit_job.sh tag -- --force --overlay
+```
+
+Re-running detect renumbers the tracks, so a reject list from before would
+reject the wrong ones. The detect step renames any reject.txt it finds in the
+bucket to `reject.before-<date>.txt`; delete your local copies (the `rm` above)
+so `03-upload_inputs.sh` does not push them back.
+
+Reading the new overlay tells you where any remaining misses are lost:
+
+| a missed firebrand has... | it was lost in... | try |
+|---|---|---|
+| a thin yellow box | the tracker | `--set track.max_heading_change_deg=45`, `--set track.max_gap=3` |
+| no box at all | the model | `--threshold 0.3` on the tag step; more training data (`--synth-frames 600` on train) |
+| no box, and it is sitting still on the ground | background subtraction (an ember that stays put for more than ~5 frames fades into the rolling median) | `--set detect.median_window=31` on detect and tag |
+
+`--set SECTION.KEY=VALUE` changes any setting in `firebrand/config.py` for one
+job, without rebuilding: `bash scripts/04-submit_job.sh tag -- --force --overlay
+--set track.max_gap=3`. It is logged at the top of the job's output.
 
 ### Where things live in the bucket
 
@@ -692,6 +808,7 @@ make_mask.py     click-to-draw exclusion mask editor
 run_pipeline.py  CLI for stages 1-3, one clip
 run_all.py       every stage, resumable, shardable -- what Batch jobs run
 batch_entry.py   container entrypoint: bucket paths, logs, hardware record
+evaluate_tags.py tagged real clips vs your verified tracks: recall, precision
 tests/benchmark.py   end-to-end benchmark and ablation
 tests/smoke_train.py torch path check, including resume (the `smoke` step)
 
@@ -711,7 +828,8 @@ notebooks/Firebrand_Colab.ipynb
 
 ## Known limits
 
-- **Recall after acceptance is ~0.45** on the benchmark, against ~0.75 raw. That
+- **Recall after acceptance is ~0.70** on the benchmark (0.45 before the
+  2026-09-28 tracker change), against ~0.74 raw. That
   is by design — requiring three coherent frames costs detections and buys
   precision — and it is the reason to train the model at all: the network sees
   three frames at once and can recover faint, short streaks the shape gate

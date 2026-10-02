@@ -311,7 +311,8 @@ def gt_masks(gt_frame, shape, width=2.0):
 # matching real statistics
 # ---------------------------------------------------------------------------
 
-def fit_config_to_tracks(track_rows, base: SynthConfig, step_ratio=None) -> SynthConfig:
+def fit_config_to_tracks(track_rows, base: SynthConfig, step_ratio=None,
+                         extra_peaks=None) -> SynthConfig:
     """Retune the synthetic parameters to match verified real tracks.
 
     This is what the contact-sheet review is really for: 800 verified tracks
@@ -349,4 +350,13 @@ def fit_config_to_tracks(track_rows, base: SynthConfig, step_ratio=None) -> Synt
         # background-subtracted -- the same quantity peak_srgb describes.
         cfg.peak_srgb = (float(np.clip(np.percentile(P, 5), 20, 255)),
                          float(np.clip(np.percentile(P, 97), 40, 255)))
+    # The verified tracks are what the TRACKER kept, and it kept the easy ones:
+    # on real 4K footage the accepted tracks peaked at p90 51 while tracks it
+    # rejected peaked at p90 112. Fitting only to the former capped synthetic
+    # brightness at ~80, so the model never saw a bright firebrand. Raise the
+    # upper bound to what the footage contains (peaks of every coherent track,
+    # accepted or not) -- the lower bound stays from the verified set.
+    if extra_peaks is not None and len(extra_peaks) >= 10:
+        hi = float(np.clip(np.percentile(np.asarray(extra_peaks, float), 97), 40, 255))
+        cfg.peak_srgb = (cfg.peak_srgb[0], max(cfg.peak_srgb[1], hi))
     return cfg

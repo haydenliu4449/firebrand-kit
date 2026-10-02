@@ -177,11 +177,35 @@ class TrackConfig:
     design rests on this: single-frame appearance cannot separate an ember from
     a paver joint, but a paver joint never moves coherently for 3 frames."""
 
-    max_heading_change_deg: float = 25.0
-    """Per-frame turn limit. Embers have inertia; noise associations do not."""
+    max_heading_change_deg: float = 35.0
+    """Per-frame turn limit. Embers have inertia; noise associations do not.
+    Was 25: on real 4K footage 106 of the 118 tracks it rejected were smooth,
+    fast tracks with ONE bend of 27-31 degrees (gravity and gusts). On the
+    synthetic benchmark 35 keeps precision at 1.00."""
 
-    max_brightness_ratio: float = 5.0
-    """Peak intensity may vary along a track, but not by more than this."""
+    max_brightness_ratio: float = 10.0
+    """Peak intensity may vary along a whole track, but not by more than this
+    (was 5; real tracks cross from flight to ground contact and dim a lot).
+    An ember cools gradually, fastest after it lands, so this is a loose bound
+    on the whole track; abrupt changes are caught by max_brightness_jump."""
+
+    max_brightness_jump: float = 5.0
+    """Frame-to-frame peak ratio above which a LINK is judged wrong and the
+    track is cut there (see split_bad_links). A stitch between a bright ember
+    and a faint streak shows up as one abrupt jump; cooling does not."""
+
+    split_bad_links: bool = True
+    """Cut a track at a link that breaks the heading or brightness-jump rule
+    and judge the pieces separately, instead of rejecting the whole track.
+
+    Measured on 40 frames of real 4K footage (clip5): 311 tracks of 3-16
+    detections were rejected outright, more than the 181 accepted. Contact
+    sheets showed why -- in a dense ember storm the linker hops from a bright
+    firebrand onto a faint streak beside it, and one bad link used to throw the
+    whole firebrand away. Those bright, wide embers (peak p90 112 vs 51 for
+    accepted tracks) are exactly the ones a person sees missing in an overlay.
+    The heading limit caught mostly smooth fast tracks with a single 27-31
+    degree bend. Set False for the original whole-track behaviour."""
 
     max_speed_cv: float = 0.8
     """Coefficient of variation of inter-frame step length. Catches

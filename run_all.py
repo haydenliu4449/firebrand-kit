@@ -55,6 +55,7 @@ import numpy as np
 import pandas as pd
 
 from firebrand import Config, frames as F, detect as D, track as T, review as R
+from firebrand.config import SynthConfig
 from firebrand import synth as S, dataset as DS, evaluate as E, gcsio
 
 VIDEO_EXTS = {".mp4", ".avi", ".mov", ".mkv", ".m4v"}
@@ -170,14 +171,32 @@ def my_clips(args):
     return mine
 
 
+def px_scale(W):
+    """How much bigger this clip's pixels-per-metre is than the 1920-wide
+    frames the pixel limits were tuned on. Never below 1: at lower resolution
+    the limits stay as they were (permissive) rather than tightening."""
+    return max(1.0, float(W) / 1920.0)
+
+
 def clip_config(cfg, W, H, fps):
-    """Per-clip detection settings, scaled to this clip's resolution."""
+    """Per-clip detection settings, scaled to this clip's resolution.
+
+    Every limit that is a size in pixels was tuned at 1920 wide. At 3840 wide
+    (these cameras) a streak, an area and a per-frame step are 2x, 4x and 2x as
+    many pixels, so the upper limits scale with the frame; otherwise the
+    fastest and closest embers -- the brightest ones -- are the first thrown
+    away. Lower limits are left alone: scaling them would only lose faint ones.
+    """
     c = Config()
     c.detect.__dict__.update(cfg.detect.__dict__)
     c.track.__dict__.update(cfg.track.__dict__)
     c.train.__dict__.update(cfg.train.__dict__)
     c.track.fps = float(fps or 15)
+    f = px_scale(W)
     c.detect.tophat_ksize = max(5, int(round(15 * W / 1920)) | 1)
+    c.detect.max_length = cfg.detect.max_length * f
+    c.detect.max_area = int(round(cfg.detect.max_area * f * f))
+    c.track.max_step_px = cfg.track.max_step_px * f
     if W * H > 2_500_000 and c.detect.bg_refresh == 1:
         c.detect.bg_refresh = 4
     return c
@@ -204,6 +223,14 @@ def stage_detect(args, cfg):
             continue
 
         out.mkdir(parents=True, exist_ok=True)
+        # A re-run renumbers the tracks, so an old reject list would reject the
+        # wrong ones. Move it aside rather than delete it: it is your work.
+        old_rej = out / "reject.txt"
+        if old_rej.exists():
+            moved = out / f"reject.before-{time.strftime('%Y%m%d-%H%M%S')}.txt"
+            old_rej.rename(moved)
+            log(f"  {name}: moved the old reject.txt to {moved.name} -- track IDs "
+                f"change on a re-run; review the new sheets and write a new one")
 
         # STREAMED, never materialised. At 3840x2160 a frame is 25 MB, so a
         # 300-frame list is 7.5 GB -- and the audit used to keep a second copy.
@@ -250,7 +277,7 @@ def stage_detect(args, cfg):
         log(f"  {name}: step_ratio {ratio:.2f} (sharpness {diag['sharpness']:.1f})")
         tracks = T.link(dets, c.track, step_ratio=ratio)
         acc = T.accept(tracks, c.track)
-        rej = T.rejected(tracks, acc)
+        rej = T.rejected(tracks, acc, c.track)
         log(f"  {name}: {sum(len(v) for v in dets.values())} candidates -> "
             f"{len(acc)} accepted tracks, {len(rej)} rejected")
 
@@ -328,7 +355,7 @@ def stage_tiles(args, cfg):
     if not clip_dirs:
         raise SystemExit("no detect output found -- run --stage detect first")
 
-    verified_rows, bg_frames, ratios = [], [], []
+    verified_rows, bg_frames, ratios, footage_peaks = [], [], [], []
     n_rejected_manual = 0
     for d in clip_dirs:
         # done.json is written last, so a clip whose detect run was cut off
@@ -342,6 +369,10 @@ def stage_tiles(args, cfg):
         rej_ids = read_rejects(d)
         n_rejected_manual += len(rej_ids)
         keep = [t for t in blob["accepted"] if t.id not in rej_ids]
+        # brightness of every coherent track in the footage, kept or not --
+        # used only to set the generator's upper brightness bound (see synth)
+        footage_peaks += [x.peak for t in blob["accepted"] + blob["rejected"]
+                          if len(t.dets) >= cfg.track.min_track_len for x in t.dets]
         meta = json.load(open(d / "done.json"))
         c = Config.load(d / "config.json")
         verified_rows += T.summarize(keep, c.track)
@@ -359,10 +390,8 @@ def stage_tiles(args, cfg):
 
     cfg.synth = S.fit_config_to_tracks(
         verified_rows, cfg.synth,
-        step_ratio=float(np.median([r for r in ratios if r])) if ratios else None)
-    log(f"  fitted speed_px {tuple(round(v,1) for v in cfg.synth.speed_px)}, "
-        f"peak_srgb {tuple(round(v,1) for v in cfg.synth.peak_srgb)}, "
-        f"exposure_duty {cfg.synth.exposure_duty:.3f}")
+        step_ratio=float(np.median([r for r in ratios if r])) if ratios else None,
+        extra_peaks=footage_peaks)
 
     bg = bg_frames[:40] if bg_frames else None
     if bg is None:
@@ -370,6 +399,16 @@ def stage_tiles(args, cfg):
 
     H, W = bg[0].shape[:2]
     cfg.detect.tophat_ksize = max(5, int(round(15 * W / 1920)) | 1)
+    # Streak width scales with resolution too. Keep the thin end (faint, far
+    # embers) and widen the other end, from the defaults so reruns do not
+    # compound. A --set synth.psf_sigma=... override wins.
+    if "synth.psf_sigma" not in args.overridden:
+        lo, hi = SynthConfig().psf_sigma
+        cfg.synth.psf_sigma = (lo, hi * px_scale(W))
+    log(f"  fitted speed_px {tuple(round(v,1) for v in cfg.synth.speed_px)}, "
+        f"peak_srgb {tuple(round(v,1) for v in cfg.synth.peak_srgb)}, "
+        f"psf_sigma {tuple(round(v,2) for v in cfg.synth.psf_sigma)}, "
+        f"exposure_duty {cfg.synth.exposure_duty:.3f}")
     roi = F.mask_from_spec((H, W), F.load_mask_spec(args.mask)) if args.mask else None
 
     with Timer(f"  rendering {args.synth_frames} synthetic frames"):
@@ -552,11 +591,17 @@ def stage_tag(args, cfg):
         H, W = first.shape[:2]
         n_frames = min(len(src) or 10 ** 9, args.max_frames or 10 ** 9)
 
-        # Reuse what detect measured on this clip (fps, IR fallback, the
-        # calibrated step ratio) when it exists; otherwise derive it the same way.
+        # Current settings (defaults + --set), plus what detect MEASURED on this
+        # clip: fps, the IR fallback and the calibrated step ratio. The
+        # thresholds themselves come from now, not from the detect run, so a
+        # retuned tracker applies without re-running detect.
+        c = clip_config(cfg, W, H, src.fps)
         det_cfg = work / "clips" / name / "config.json"
-        c = Config.load(det_cfg) if det_cfg.exists() else clip_config(cfg, W, H, src.fps)
-        if not det_cfg.exists() and F.is_ir(first):
+        if det_cfg.exists():
+            m = Config.load(det_cfg)
+            c.track.fps, c.track.step_ratio = m.track.fps, m.track.step_ratio
+            c.detect.channel = m.detect.channel
+        elif F.is_ir(first):
             c.detect.channel = "gray"
         c.train = tcfg
         roi = roi_for(args, first)
@@ -568,6 +613,14 @@ def stage_tag(args, cfg):
         pd.DataFrame(T.summarize(acc, c.track)).to_csv(out / "tracks.csv", index=False)
         pd.DataFrame([{**d.as_dict(), "track_id": t.id} for t in acc for d in t.dets]) \
             .to_csv(out / "detections.csv", index=False)
+        # Everything the model detected that did NOT end up in an accepted
+        # track. When the overlay misses a firebrand, this says why: a yellow
+        # box on it means the model saw it and the tracker dropped it; no box
+        # means the model never saw it (threshold, or training data).
+        in_acc = {id(d) for t in acc for d in t.dets}
+        cand = [d for v in dets.values() for d in v if id(d) not in in_acc]
+        pd.DataFrame([d.as_dict() for d in cand], columns=list(D.Detection.__dataclass_fields__)) \
+            .to_csv(out / "candidates.csv", index=False)
         lab = out / "labels"
         lab.mkdir(exist_ok=True)
         for fi, boxes in T.to_yolo_labels(acc, (H, W)).items():
@@ -576,14 +629,17 @@ def stage_tag(args, cfg):
                     fh.write(f"{cl} {xc:.6f} {yc:.6f} {bw:.6f} {bh:.6f}\n")
 
         if args.overlay:
-            by = {}
+            by, cby = {}, {}
             for tr in acc:
                 for d in tr.dets:
                     by.setdefault(d.frame, []).append(d)
+            for d in cand:
+                cby.setdefault(d.frame, []).append(d)
             vw = cv2.VideoWriter(str(out / "overlay.mp4"),
                                  cv2.VideoWriter_fourcc(*"mp4v"), c.track.fps, (W, H))
             for i, f in enumerate(stream()):
-                vw.write(D.draw(f, by.get(i, [])))
+                f = D.draw(f, cby.get(i, []), color=(0, 220, 255), thickness=1)   # yellow
+                vw.write(D.draw(f, by.get(i, [])))                                # green
             vw.release()
 
         classical = None
@@ -591,7 +647,8 @@ def stage_tag(args, cfg):
         if det_done.exists():
             classical = json.load(open(det_done)).get("n_accepted")
         n_det = sum(len(v) for v in dets.values())
-        log(f"  {name}: {n_det} model detections -> {len(acc)} accepted tracks"
+        log(f"  {name}: {n_det} model detections -> {len(acc)} accepted tracks, "
+            f"{len(cand)} detections not in any accepted track"
             + (f" (classical detector: {classical})" if classical is not None else ""))
         with open(flag, "w") as fh:
             json.dump({"clip": clip, "n_frames": n_frames, "shape": [H, W],
@@ -608,6 +665,33 @@ STAGES = {"detect": stage_detect, "tiles": stage_tiles,
           "train": stage_train, "eval": stage_eval, "tag": stage_tag}
 ALL = ["detect", "tiles", "train", "eval", "tag"]
 PER_CLIP = {"detect", "tag"}
+
+
+def apply_overrides(cfg, items):
+    """--set track.max_heading_change_deg=40 -> cfg.track.max_heading_change_deg = 40.0"""
+    done = set()
+    for item in items:
+        key, eq, raw = item.partition("=")
+        section, dot, field = key.strip().partition(".")
+        sub = getattr(cfg, section, None) if dot else None
+        if not eq or sub is None or not hasattr(sub, field):
+            raise SystemExit(f"bad --set {item!r}: want SECTION.KEY=VALUE with SECTION one of "
+                             f"detect, track, synth, train and KEY a field in firebrand/config.py")
+        try:
+            val = json.loads(raw)
+        except ValueError:
+            val = raw
+        cur = getattr(sub, field)
+        if isinstance(cur, bool):
+            val = str(val).lower() in ("1", "true", "yes")
+        elif isinstance(cur, float) and isinstance(val, (int, float)):
+            val = float(val)
+        elif isinstance(cur, tuple) and isinstance(val, list):
+            val = tuple(val)
+        setattr(sub, field, val)
+        done.add(f"{section}.{field}")
+        log(f"  setting {section}.{field} = {val!r}")
+    return done
 
 
 def parse_stages(spec):
@@ -643,12 +727,22 @@ def main(argv=None):
     ap.add_argument("--threshold", type=float, default=None,
                     help="tag: model probability threshold (default: from eval)")
     ap.add_argument("--overlay", action="store_true")
+    ap.add_argument("--set", action="append", default=[], metavar="SECTION.KEY=VALUE",
+                    help="override any setting in firebrand/config.py, e.g. "
+                         "--set track.max_heading_change_deg=40 (repeatable)")
     args = ap.parse_args(argv)
     args.shard = parse_shard(args.shard)
 
     Path(args.work).mkdir(parents=True, exist_ok=True)
+    # Detection and tracking settings come from the code (plus --set), NOT from
+    # <work>/config.json: that file is written by the tiles stage and used to
+    # carry the whole config, so an old run's thresholds silently overrode any
+    # later fix to the defaults. Only the fitted generator is carried over.
+    cfg = Config()
     cfg_path = Path(args.work) / "config.json"
-    cfg = Config.load(cfg_path) if cfg_path.exists() else Config()
+    if cfg_path.exists():
+        cfg.synth = Config.load(cfg_path).synth
+    args.overridden = apply_overrides(cfg, args.set)
 
     order = parse_stages(args.stage)
     log(f"stages: {' -> '.join(order)}   work={args.work}", rule=True)

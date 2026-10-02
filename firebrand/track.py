@@ -292,6 +292,64 @@ def _heading_ok(t: Track, max_deg):
     return bool(np.all(np.rad2deg(d) <= max_deg))
 
 
+def _cut_points(t: Track, cfg: TrackConfig):
+    """Indices i where the link (i-1 -> i) looks wrong: an abrupt brightness
+    jump, or a turn sharper than the heading limit. At a sharp turn the joint
+    detection stays with the earlier piece -- for a bounce that is the ground
+    contact, the end of the descent, which is worth keeping."""
+    cuts = set()
+    p = np.array([d.peak for d in t.dets], float)
+    for i in range(1, len(p)):
+        lo, hi = sorted((p[i - 1], p[i]))
+        if lo <= 0 or hi / lo > cfg.max_brightness_jump:
+            cuts.add(i)
+    if len(t.dets) >= 3:
+        d = np.diff(t.xy, axis=0)
+        h = np.arctan2(d[:, 1], d[:, 0])
+        turn = np.rad2deg(np.abs(np.angle(np.exp(1j * np.diff(h)))))
+        for j in np.where(turn > cfg.max_heading_change_deg)[0]:
+            cuts.add(int(j) + 2)
+    return sorted(c for c in cuts if 0 < c < len(t.dets))
+
+
+def pieces(tracks: list[Track], cfg: TrackConfig) -> list[Track]:
+    """Every track, cut at its bad links (deterministic: same input, same ids).
+
+    The first piece keeps the original id; later pieces get fresh ids above
+    every existing one, so IDs stay unique for contact sheets and reject.txt.
+    """
+    if not getattr(cfg, "split_bad_links", False):
+        return list(tracks)
+    out, next_id = [], max((t.id for t in tracks), default=-1) + 1
+    for t in tracks:
+        cuts = _cut_points(t, cfg)
+        if not cuts:
+            out.append(t)
+            continue
+        bounds = [0] + cuts + [len(t.dets)]
+        for k, (a, b) in enumerate(zip(bounds, bounds[1:])):
+            if k == 0:
+                out.append(Track(t.id, t.dets[a:b]))
+            else:
+                out.append(Track(next_id, t.dets[a:b]))
+                next_id += 1
+    return out
+
+
+def _physical(t: Track, cfg: TrackConfig) -> bool:
+    if len(t.dets) < cfg.min_track_len:
+        return False
+    if not _heading_ok(t, cfg.max_heading_change_deg):
+        return False
+    peaks = np.array([d.peak for d in t.dets], float)
+    if peaks.min() <= 0 or peaks.max() / peaks.min() > cfg.max_brightness_ratio:
+        return False
+    s = t.steps
+    if len(s) >= 2 and s.mean() > 1e-6 and s.std() / s.mean() > cfg.max_speed_cv:
+        return False
+    return True
+
+
 def accept(tracks: list[Track], cfg: TrackConfig) -> list[Track]:
     """Keep only tracks that behave like a physical particle.
 
@@ -300,32 +358,28 @@ def accept(tracks: list[Track], cfg: TrackConfig) -> list[Track]:
       heading     -- associations that jump between unrelated detections
       brightness  -- a stitch between a bright ember and a faint artifact
       speed CV    -- a stitch between two particles at different speeds
+
+    With cfg.split_bad_links (the default) a track that breaks the heading or
+    brightness-jump rule at one link is cut there first, and each piece is
+    judged on its own -- one bad association no longer discards a real ember.
     """
-    out = []
-    for t in tracks:
-        if len(t.dets) < cfg.min_track_len:
-            continue
-        if not _heading_ok(t, cfg.max_heading_change_deg):
-            continue
-        peaks = np.array([d.peak for d in t.dets], float)
-        if peaks.min() <= 0 or peaks.max() / peaks.min() > cfg.max_brightness_ratio:
-            continue
-        s = t.steps
-        if len(s) >= 2 and s.mean() > 1e-6 and s.std() / s.mean() > cfg.max_speed_cv:
-            continue
-        out.append(t)
-    return out
+    return [t for t in pieces(tracks, cfg) if _physical(t, cfg)]
 
 
-def rejected(tracks: list[Track], accepted: list[Track]) -> list[Track]:
+def rejected(tracks: list[Track], accepted: list[Track], cfg: TrackConfig | None = None) -> list[Track]:
     """Everything acceptance threw away.
 
     Do not discard these. Each one is a labelled *negative* -- a paver joint, a
     compression block, a reflection -- and hard negatives mined from your own
     footage are worth far more to the model than random background crops.
+
+    Pass the same cfg given to accept(): with split_bad_links the rejected set
+    is made of pieces, so that the good half of a cut track is not filed as a
+    negative.
     """
-    keep = {id(t) for t in accepted}
-    return [t for t in tracks if id(t) not in keep]
+    pool = pieces(tracks, cfg) if cfg is not None else tracks
+    keep = {(t.id, t.frames[0]) for t in accepted}
+    return [t for t in pool if (t.id, t.frames[0]) not in keep]
 
 
 # ---------------------------------------------------------------------------
