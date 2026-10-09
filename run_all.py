@@ -343,6 +343,124 @@ def read_rejects(d: Path):
     return {int(x) for x in txt if x.strip().lstrip("-").isdigit()}
 
 
+# ---------------------------------------------------------------------------
+# real footage with NO firebrands: <work>/negatives.txt
+# ---------------------------------------------------------------------------
+
+def read_negatives(path: Path):
+    """<work>/negatives.txt -> {clip_stem: [(first, last), ...]}, None = whole clip.
+
+        # clip   frames (0-based, inclusive) where NO firebrand is anywhere in view
+        clip3    0-150
+        clip5    400-520, 900-1010
+        clip8                      # the whole clip
+
+    These are the only frames the kit can label with certainty without a
+    person drawing anything: if nothing is there, every pixel is "not a
+    firebrand". suggest_negatives.py proposes ranges; you confirm by watching.
+    """
+    out = {}
+    if not path.exists():
+        return out
+    for line in path.read_text().splitlines():
+        line = line.split("#", 1)[0].strip()
+        if not line:
+            continue
+        parts = line.replace(",", " ").split()
+        name, ranges = Path(parts[0]).stem, []
+        for tok in parts[1:]:
+            a, sep, b = tok.partition("-")
+            if not a.isdigit() or (sep and not b.isdigit()):
+                raise SystemExit(f"negatives.txt: cannot read {tok!r} in {line!r} -- "
+                                 f"use FIRST-LAST frame numbers, e.g. 120-300")
+            lo, hi = int(a), int(b) if sep else int(a)
+            ranges.append((min(lo, hi), max(lo, hi)))
+        out.setdefault(name, []).extend(ranges or [None])
+    return out
+
+
+def iter_negative_frames(args, cfg, specs, max_frames, work=None):
+    """Yield (clip, segment, frame_index, residual_stack, roi, clip_cfg) for the
+    frames listed in negatives.txt, at most `max_frames` of them in total.
+
+    Streamed one frame at a time: a 4K stack is 25 MB, so holding a few hundred
+    would not fit. Decoding starts half a median window early so the first
+    listed frame already has a real background behind it.
+    """
+    clips = {Path(c).stem: c for c in list_clips(args.clips)}
+    budget, seg = max_frames, 0
+    for name in sorted(specs):
+        if budget <= 0:
+            return
+        if name not in clips:
+            log(f"  negatives.txt: no clip called {name} in {args.clips} -- skipped")
+            continue
+        src = F.VideoSource(clips[name])
+        first = next(iter(src), None)
+        if first is None:
+            continue
+        H, W = first.shape[:2]
+        c = clip_config(cfg, W, H, src.fps)
+        det_cfg = Path(work or args.work) / "clips" / name / "config.json"
+        if det_cfg.exists():
+            c.detect.channel = Config.load(det_cfg).detect.channel
+        elif F.is_ir(first):
+            c.detect.channel = "gray"
+        roi = roi_for(args, first)
+        n_total = len(src) or 10 ** 9
+        for r in sorted(specs[name], key=lambda r: (-1, 0) if r is None else r):
+            if budget <= 0:
+                return
+            a, b = (0, n_total - 1) if r is None else r
+            b = min(b, a + budget - 1)
+            lo = max(0, a - c.detect.median_window)
+
+            def window(lo=lo, hi=b):
+                for i, f in enumerate(src):
+                    if i > hi:
+                        return
+                    if i >= lo:
+                        yield f
+
+            for k, stack in DS.residual_stacks(window(), c.detect, roi,
+                                               cfg.train.n_frames_stack):
+                fi = lo + k
+                if a <= fi <= b and budget > 0:
+                    budget -= 1
+                    yield name, seg, fi, stack, roi, c
+            seg += 1
+
+
+def count_negative_frames(args, specs):
+    clips = {Path(c).stem: c for c in list_clips(args.clips)}
+    n = 0
+    for name, ranges in specs.items():
+        if name not in clips:
+            continue
+        total = None
+        for r in ranges:
+            if r is None:
+                total = total or len(F.VideoSource(clips[name])) or 0
+                n += total
+            else:
+                n += r[1] - r[0] + 1
+    return n
+
+
+def read_run(args, clip_stem, first, n):
+    """n consecutive raw frames of one clip, from `first` on."""
+    path = {Path(c).stem: c for c in list_clips(args.clips)}.get(clip_stem)
+    if path is None:
+        return []
+    out = []
+    for i, f in enumerate(F.VideoSource(path)):
+        if i >= first + n:
+            break
+        if i >= first:
+            out.append(f)
+    return out
+
+
 def stage_tiles(args, cfg):
     work = Path(args.work)
     tiles_path = work / "data" / "tiles.npz"
@@ -355,7 +473,7 @@ def stage_tiles(args, cfg):
     if not clip_dirs:
         raise SystemExit("no detect output found -- run --stage detect first")
 
-    verified_rows, bg_frames, ratios, footage_peaks = [], [], [], []
+    verified_rows, bg_runs, ratios, footage_peaks = [], [], [], []
     n_rejected_manual = 0
     for d in clip_dirs:
         # done.json is written last, so a clip whose detect run was cut off
@@ -377,8 +495,9 @@ def stage_tiles(args, cfg):
         c = Config.load(d / "config.json")
         verified_rows += T.summarize(keep, c.track)
         ratios.append(meta.get("step_ratio"))
-        if (d / "bg").exists() and len(bg_frames) < 40:
-            bg_frames += [cv2.imread(str(q)) for q in sorted((d / "bg").glob("*.png"))]
+        bg_paths = sorted((d / "bg").glob("*.png")) if (d / "bg").exists() else []
+        if bg_paths:
+            bg_runs.append((d.name, bg_paths))
         log(f"  {d.name}: {len(keep)} verified "
             f"({len(rej_ids)} manually rejected)")
 
@@ -393,11 +512,10 @@ def stage_tiles(args, cfg):
         step_ratio=float(np.median([r for r in ratios if r])) if ratios else None,
         extra_peaks=footage_peaks)
 
-    bg = bg_frames[:40] if bg_frames else None
-    if bg is None:
+    if not bg_runs:
         raise SystemExit("no background frames saved -- re-run detect")
-
-    H, W = bg[0].shape[:2]
+    first_bg = cv2.imread(str(bg_runs[0][1][0]))
+    H, W = first_bg.shape[:2]
     cfg.detect.tophat_ksize = max(5, int(round(15 * W / 1920)) | 1)
     # Streak width scales with resolution too. Keep the thin end (faint, far
     # embers) and widen the other end, from the defaults so reruns do not
@@ -411,10 +529,78 @@ def stage_tiles(args, cfg):
         f"exposure_duty {cfg.synth.exposure_duty:.3f}")
     roi = F.mask_from_spec((H, W), F.load_mask_spec(args.mask)) if args.mask else None
 
+    # Backgrounds: one run per clip (every clip, not just the first few), and
+    # -- better -- runs from frames you listed as having NO firebrands, which
+    # carry the camera's real noise without real embers that would otherwise
+    # be in the picture but labelled "not a firebrand". Half the chunks use
+    # those clean runs when there are any.
+    def loader(paths):
+        return lambda: [cv2.imread(str(q)) for q in paths]
+
+    runs = [loader(pths) for _name, pths in bg_runs
+            if cv2.imread(str(pths[0])).shape[:2] == (H, W)]
+    specs = read_negatives(work / "negatives.txt")
+    clean = []
+    for name in sorted(specs):
+        for r in specs[name][:2]:
+            if len(clean) >= 4:
+                break
+            a = 0 if r is None else r[0]
+            n = 16 if r is None else min(16, r[1] - r[0] + 1)
+            frames = read_run(args, name, a, n) if n >= 3 else []
+            if frames and frames[0].shape[:2] == (H, W):
+                clean.append(frames)
+    if clean:
+        mixed = []
+        for i in range(max(len(runs), len(clean))):
+            mixed += [clean[i % len(clean)], runs[i % len(runs)]]
+        runs = mixed
+    log(f"  synthetic backgrounds: {len(bg_runs)} clip run(s)"
+        + (f" + {len(clean)} firebrand-free run(s) from negatives.txt" if clean else
+           "  (no negatives.txt -- backgrounds contain real, unlabelled embers)"))
+
     with Timer(f"  rendering {args.synth_frames} synthetic frames"):
-        X, Y, _sf, _sg = DS.build_from_synthetic(bg, args.synth_frames, cfg,
+        X, Y, _sf, _sg = DS.build_from_synthetic(runs, args.synth_frames, cfg,
                                                  seed=0, roi_mask=roi)
-    log(f"  {DS.tile_stats(X, Y)}")
+    log(f"  synthetic: {DS.tile_stats(X, Y)}")
+
+    # Real negatives: tiles of footage you confirmed has no firebrands, target
+    # all zero. Without them the model has only ever seen scenes WITH embers
+    # and fires on texture and noise when a clip goes quiet.
+    if specs:
+        n_target = int(round(len(X) * args.neg_frac / max(1e-6, 1 - args.neg_frac)))
+        rng = np.random.default_rng(1)
+        Xn, used_frames, tile = [], 0, cfg.train.tile
+        avail = min(count_negative_frames(args, specs), args.max_neg_frames)
+        per_frame = max(1, min(48, -(-n_target // max(1, avail))))
+        with Timer(f"  real negatives: up to {n_target} tiles from negatives.txt"):
+            for _clip, _seg, _fi, stack, nroi, _c in iter_negative_frames(
+                    args, cfg, specs, args.max_neg_frames, work):
+                if len(Xn) >= n_target:
+                    break
+                used_frames += 1
+                pos = DS.tile_positions(stack.shape[1:], tile, cfg.train.stride)
+                rng.shuffle(pos)
+                took = 0
+                for (y, x) in pos:
+                    if took >= per_frame or len(Xn) >= n_target:
+                        break
+                    if nroi is not None and (nroi[y:y + tile, x:x + tile] > 0).mean() < 0.5:
+                        continue
+                    Xn.append(stack[:, y:y + tile, x:x + tile])
+                    took += 1
+        if Xn:
+            Xn = np.array(Xn, np.uint8)
+            X = np.concatenate([X, Xn])
+            Y = np.concatenate([Y, np.zeros((len(Xn),) + Y.shape[1:], Y.dtype)])
+            log(f"  real negatives: {len(Xn)} tiles from {used_frames} firebrand-free "
+                f"frames ({len(Xn) / len(X):.0%} of all tiles)")
+        else:
+            log("  !! negatives.txt is there but gave no tiles -- check clip names and frames")
+    else:
+        log("  !! no negatives.txt: the model will never see a scene with no firebrands.")
+        log("     List some firebrand-free frames (python suggest_negatives.py helps).")
+    log(f"  all tiles: {DS.tile_stats(X, Y)}")
     tiles_path.parent.mkdir(parents=True, exist_ok=True)
     DS.save_tiles(tiles_path, X, Y)
     cfg.save(work / "config.json")
@@ -492,8 +678,56 @@ def stage_eval(args, cfg):
 
     with Timer("  threshold sweep"):
         sweep = I.sweep_threshold(model, F.ArraySource(tf), cfg, gtf, roi, device=dev)
-    best = max(sweep, key=lambda r: r["f1"])
-    log(f"  best threshold {best['threshold']} (F1 {best['f1']:.3f})")
+    best_f1 = max(sweep, key=lambda r: r["f1"])
+    best = best_f1
+    log(f"  best-F1 threshold on synthetic embers: {best_f1['threshold']} "
+        f"(F1 {best_f1['f1']:.3f})")
+
+    # The synthetic sweep always has embers in view, so it cannot see the
+    # failure that matters on quiet footage: tagging texture when nothing is
+    # there. If negatives.txt lists firebrand-free frames, count the tracks the
+    # model invents on them at every threshold, and pick the best-F1 threshold
+    # that keeps that under --max-empty-fp per 100 frames.
+    specs = read_negatives(work / "negatives.txt")
+    empty = None
+    if specs:
+        ths = [r["threshold"] for r in sweep]
+        dets = {th: {} for th in ths}
+        seg_cfg = {}
+        n_used = 0
+        with Timer("  false tracks on firebrand-free frames"):
+            for clip, seg, fi, stack, nroi, c in iter_negative_frames(
+                    args, cfg, specs, args.max_eval_neg_frames, work):
+                c.train = cfg.train
+                seg_cfg[(clip, seg)] = c
+                prob = I.predict_map(model, stack, cfg.train.tile, cfg.train.stride, dev)
+                for th in ths:
+                    dets[th].setdefault((clip, seg), {})[fi] = \
+                        I.detections_from_map(prob, fi, c, th, nroi)
+                n_used += 1
+        rates = {}
+        for th in ths:
+            n_tr = 0
+            for key, by in dets[th].items():
+                c = seg_cfg[key]
+                n_tr += len(T.accept(T.link(by, c.track,
+                                            step_ratio=T.estimate_step_ratio(by, c.track)),
+                                     c.track))
+            rates[th] = 100.0 * n_tr / max(n_used, 1)
+        for r in sweep:
+            r["false_tracks_per_100_empty_frames"] = rates[r["threshold"]]
+        empty = {"frames": n_used, "max_allowed": args.max_empty_fp}
+        log(f"  {n_used} firebrand-free frames: false tracks per 100 frames")
+        for r in sweep:
+            log(f"    threshold {r['threshold']:.1f}   F1 {r['f1']:.3f}   "
+                f"false tracks {rates[r['threshold']]:.2f}")
+        ok = [r for r in sweep if rates[r["threshold"]] <= args.max_empty_fp]
+        best = max(ok, key=lambda r: r["f1"]) if ok else \
+            min(sweep, key=lambda r: (rates[r["threshold"]], -r["f1"]))
+        if best is not best_f1:
+            log(f"  -> using threshold {best['threshold']} instead: the best-F1 one "
+                f"invents {rates[best_f1['threshold']]:.2f} tracks per 100 empty frames")
+    log(f"  operating threshold {best['threshold']} (F1 {best['f1']:.3f})")
 
     with Timer("  learned model"):
         m_dets, m_tracks = I.run_clip(model, F.ArraySource(tf), cfg, roi,
@@ -504,7 +738,8 @@ def stage_eval(args, cfg):
                                 step_ratio=T.estimate_step_ratio(c_dets, cfg.track)),
                          cfg.track)
 
-    rep = {"threshold": best["threshold"], "sweep": sweep,
+    rep = {"threshold": best["threshold"], "threshold_best_f1": best_f1["threshold"],
+           "empty_frames": empty, "sweep": sweep,
            "learned": E.report(m_dets, m_tracks, gtf),
            "classical": E.report(c_dets, c_acc, gtf)}
     with open(report_path, "w") as fh:
@@ -609,6 +844,17 @@ def stage_tag(args, cfg):
         with Timer(f"  {name}: tagging {n_frames} frames at threshold {thresh}"):
             dets, acc = I.run_clip(model, _Gen(stream), c, roi, thresh, dev,
                                    progress=progress_printer(n_frames))
+        if args.min_track_conf > 0:
+            # Hysteresis: detect at the operating threshold (keeps the faint
+            # parts of real tracks), but keep a track only if the model was
+            # confident on at least one of its detections. Texture the model
+            # half-believes never gets there. Detection.peak here is the
+            # model's probability x 255.
+            before = len(acc)
+            acc = [t for t in acc
+                   if max(d.peak for d in t.dets) >= 255.0 * args.min_track_conf]
+            log(f"  {name}: --min-track-conf {args.min_track_conf}: kept "
+                f"{len(acc)} of {before} tracks")
 
         pd.DataFrame(T.summarize(acc, c.track)).to_csv(out / "tracks.csv", index=False)
         pd.DataFrame([{**d.as_dict(), "track_id": t.id} for t in acc for d in t.dets]) \
@@ -727,6 +973,19 @@ def main(argv=None):
     ap.add_argument("--threshold", type=float, default=None,
                     help="tag: model probability threshold (default: from eval)")
     ap.add_argument("--overlay", action="store_true")
+    ap.add_argument("--neg-frac", type=float, default=0.25,
+                    help="tiles: share of training tiles taken from firebrand-free "
+                         "frames listed in <work>/negatives.txt")
+    ap.add_argument("--max-neg-frames", type=int, default=600,
+                    help="tiles: most firebrand-free frames to read")
+    ap.add_argument("--max-eval-neg-frames", type=int, default=200,
+                    help="eval: firebrand-free frames used to count false tracks")
+    ap.add_argument("--max-empty-fp", type=float, default=1.0,
+                    help="eval: most false tracks per 100 firebrand-free frames "
+                         "allowed when choosing the operating threshold")
+    ap.add_argument("--min-track-conf", type=float, default=0.0,
+                    help="tag: keep a track only if the model's probability "
+                         "reaches this on at least one of its detections (0 = off)")
     ap.add_argument("--set", action="append", default=[], metavar="SECTION.KEY=VALUE",
                     help="override any setting in firebrand/config.py, e.g. "
                          "--set track.max_heading_change_deg=40 (repeatable)")

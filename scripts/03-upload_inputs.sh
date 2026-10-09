@@ -11,6 +11,7 @@
 #   clips/*.mp4                   -> <bucket>/clips/
 #   masks/*.json                  -> <bucket>/masks/
 #   work/clips/<clip>/reject.txt  -> <bucket>/work/clips/<clip>/reject.txt
+#   work/negatives.txt            -> <bucket>/work/negatives.txt  (firebrand-free frames)
 #
 # Nothing else under work/ is uploaded: the bucket's copy of work/ is the one
 # the jobs write, and this script never overwrites it.
@@ -38,6 +39,12 @@ if [[ -d "${ROOT_DIR}/masks" ]]; then
     warn "  MASK=${MASK} in .env but masks/${MASK} does not exist locally."
     warn "  Jobs will fall back to masking only the burned-in overlays."
   fi
+fi
+
+if [[ -f "${ROOT_DIR}/work/negatives.txt" ]]; then
+  n=$(grep -cvE '^\s*(#|$)' "${ROOT_DIR}/work/negatives.txt" || true)
+  bold "Firebrand-free footage: work/negatives.txt (${n} line(s))"
+  gc storage cp "${ROOT_DIR}/work/negatives.txt" "${GCS_ROOT}/work/negatives.txt" --quiet
 fi
 
 shopt -s nullglob

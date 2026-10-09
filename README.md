@@ -307,6 +307,66 @@ Reading the new overlay tells you where any remaining misses are lost:
 job, without rebuilding: `bash scripts/04-submit_job.sh tag -- --force --overlay
 --set track.max_gap=3`. It is logged at the top of the job's output.
 
+### If the model tags things when there are no firebrands
+
+Spontaneous tags on quiet footage mean the model has never been shown a scene
+with nothing in it. Its training scenes are synthetic embers painted onto your
+footage, and before 2026-10-02 every one of them had embers. The backgrounds
+were also the first 12 frames of only the first few clips, full of real embers
+labelled "not a firebrand", stitched together so the scene jumped every 12
+frames. So the model expects firebrands everywhere and settles for texture when
+there are none.
+
+**Quick, no retraining:** keep a track only if the model was confident on at
+least one of its detections. The faint parts of real tracks survive; texture
+the model half-believes does not.
+
+```bash
+bash scripts/04-submit_job.sh tag -- --force --overlay --min-track-conf 0.8
+```
+
+Try 0.7 to 0.9 and compare the overlays. It can also drop a few genuinely
+faint tracks, so this is a stopgap.
+
+**The fix: show it real empty footage.** List frames where nothing is in view
+in `work/negatives.txt`:
+
+```
+# clip   frames (0-based, inclusive) with NO firebrand anywhere in view
+clip3    0-150
+clip5    400-520, 900-1010
+clip8                       # the whole clip
+```
+
+`suggest_negatives.py` proposes stretches where the classical detector found
+nothing for 2 s or more, with the times to look at in the video, and flags
+the ones where the model invented tracks:
+
+```bash
+bash scripts/05-gcs_sync.sh review && bash scripts/05-gcs_sync.sh tags
+python3 suggest_negatives.py            # -> work/negatives.suggested.txt
+#   watch each stretch; copy the ones you agree with into work/negatives.txt
+bash scripts/03-upload_inputs.sh        # uploads negatives.txt
+bash scripts/04-submit_job.sh train -- --force
+bash scripts/04-submit_job.sh tag -- --force --overlay
+```
+
+With that file, the train step:
+
+- adds real "nothing here" tiles from those frames (25% of the training set,
+  `--neg-frac`);
+- renders half the synthetic embers onto those firebrand-free frames, so the
+  backgrounds are your camera's real noise without unlabelled real embers. Every
+  clip now contributes backgrounds, and a sequence never jumps between clips;
+- counts the tracks the model invents on those frames at every threshold
+  (`report.json`, and printed), and picks the best threshold that invents at
+  most 1 per 100 empty frames (`--max-empty-fp`).
+
+**Only list frames you are sure are empty.** A frame with one faint real ember
+in it teaches the model that faint embers are background, which is the population
+your saltation contacts are in. A few confirmed seconds per clip are enough.
+When unsure, leave it out.
+
 ### Where things live in the bucket
 
 ```
@@ -809,6 +869,7 @@ run_pipeline.py  CLI for stages 1-3, one clip
 run_all.py       every stage, resumable, shardable -- what Batch jobs run
 batch_entry.py   container entrypoint: bucket paths, logs, hardware record
 evaluate_tags.py tagged real clips vs your verified tracks: recall, precision
+suggest_negatives.py proposes firebrand-free stretches for work/negatives.txt
 tests/benchmark.py   end-to-end benchmark and ablation
 tests/smoke_train.py torch path check, including resume (the `smoke` step)
 

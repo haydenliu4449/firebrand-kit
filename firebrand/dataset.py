@@ -113,9 +113,28 @@ def build_tiles(source, masks_by_frame, dcfg: DetectConfig, tcfg: TrainConfig,
     return np.array(X, np.uint8), np.array(Y, np.float32)
 
 
+def _as_runs(background):
+    """A list of RUNS (each a list of consecutive frames from one clip, or a
+    callable that loads one) -> that list; anything else -> None."""
+    if callable(background):
+        return [background]
+    if isinstance(background, (list, tuple)) and background and \
+            (callable(background[0]) or isinstance(background[0], (list, tuple))):
+        return list(background)
+    return None
+
+
 def build_from_synthetic(background, n_frames, cfg, seed=0, max_tiles=None,
                          roi_mask=None, chunk=40, progress=True):
     """Render synthetic clips and tile them, in bounded memory.
+
+    `background` is one frame, one list of consecutive frames, or a list of
+    RUNS -- each run a list of consecutive frames from ONE clip, or a callable
+    that loads one. With runs, each chunk is rendered on a single run, played
+    forward then backward so the sequence never jumps. Do not concatenate
+    frames from different clips into one list: every jump between clips is a
+    whole-scene change that fills ~half a window of residuals with junk the
+    model is then trained to call "not a firebrand".
 
     GENERATED IN CHUNKS ON PURPOSE. The obvious implementation renders all
     n_frames, then re-encodes them, then tiles them -- and at 3840x2160 one
@@ -145,11 +164,20 @@ def build_from_synthetic(background, n_frames, cfg, seed=0, max_tiles=None,
     min_chunk = cfg.detect.median_window + cfg.train.n_frames_stack + 2
     chunk = max(int(chunk), min_chunk)
 
+    runs = _as_runs(background)
+    k_chunk = 0
     while n_done < n_frames:
         n = min(chunk, n_frames - n_done)
         if n < min_chunk and n_done > 0:
             break                                  # trailing stub yields nothing
-        frames, gt = S.make_clip(background, n, cfg.synth, seed=rng_seed,
+        bg = background
+        if runs is not None:
+            r = runs[k_chunk % len(runs)]
+            bg = list(r() if callable(r) else r)
+            if len(bg) > 2:
+                bg = bg + bg[-2:0:-1]              # ping-pong: never jumps
+        k_chunk += 1
+        frames, gt = S.make_clip(bg, n, cfg.synth, seed=rng_seed,
                                  roi_mask=roi_mask)
         if cfg.synth.reencode_h264:
             frames = S.reencode(frames, fps=int(cfg.track.fps))
