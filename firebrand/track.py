@@ -55,12 +55,19 @@ class Track:
         return self.dets[-1]
 
     def predict(self, cfg: TrackConfig, step_ratio: float, next_frame: int):
-        """Where this track should appear at `next_frame`.
+        """Where this track should appear at `next_frame`: ([(x, y), ...], step).
 
         Two frames in, use the observed velocity (a constant-velocity model is
-        right for an ember between contacts). With only one detection, fall
-        back to the streak itself: length x step_ratio is the expected
-        displacement, and theta is the direction.
+        right for an ember between contacts): one candidate position.
+
+        With only one detection, fall back to the streak itself: length x
+        step_ratio is the expected displacement, along the streak. But a
+        streak's orientation is defined mod pi -- it cannot say which end is
+        the head -- so BOTH ends are candidates and the linker takes whichever
+        the next detection is nearer to. (Until 2026-10-08 only the +theta end
+        was tried. theta from minAreaRect lies in [-90, 90) degrees, so that
+        meant "rightward": an ember flying left could never be linked, and
+        every one of them was thrown away as a 1-frame track.)
         """
         gap = max(next_frame - self.last().frame, 1)
         if len(self.dets) >= 2:
@@ -68,15 +75,12 @@ class Track:
             dt = max(b.frame - a.frame, 1)
             vx, vy = (b.x - a.x) / dt, (b.y - a.y) / dt
             step = float(np.hypot(vx, vy))
-            return b.x + vx * gap, b.y + vy * gap, max(step, 1.0)
+            return [(b.x + vx * gap, b.y + vy * gap)], max(step, 1.0)
 
         d = self.last()
         step = min(d.L * step_ratio, cfg.max_step_px)
-        # A streak's orientation is defined mod pi -- the raw angle cannot say
-        # which end is the head. With one detection we have to try both; the
-        # gate below is generous enough that the wrong sign is usually rejected
-        # on the next frame by the heading-consistency check.
-        return d.x + step * np.cos(d.theta) * gap, d.y + step * np.sin(d.theta) * gap, max(step, 1.0)
+        ox, oy = step * np.cos(d.theta) * gap, step * np.sin(d.theta) * gap
+        return [(d.x + ox, d.y + oy), (d.x - ox, d.y - oy)], max(step, 1.0)
 
 
 # ---------------------------------------------------------------------------
@@ -118,14 +122,14 @@ def link(dets_by_frame: dict[int, list[Detection]], cfg: TrackConfig,
         # cost = distance from prediction, gated per-track
         C = np.full((len(live), len(dets)), 1e6, float)
         for i, t in enumerate(live):
-            px, py, step = t.predict(cfg, step_ratio, fi)
+            cands, step = t.predict(cfg, step_ratio, fi)
             # The gate must grow with the gap: predicting two frames ahead has
             # roughly twice the error of predicting one. Without this, max_gap
             # is silently inoperative -- the track survives but can never match.
             gap = max(fi - t.last().frame, 1)
             gate = max(cfg.gate_frac * step * gap, 6.0)
             for j, d in enumerate(dets):
-                dist = float(np.hypot(d.x - px, d.y - py))
+                dist = min(float(np.hypot(d.x - px, d.y - py)) for px, py in cands)
                 if dist <= gate:
                     C[i, j] = dist
 
@@ -432,20 +436,37 @@ def summarize(tracks: list[Track], cfg: TrackConfig) -> "list[dict]":
     return rows
 
 
-def to_yolo_labels(tracks: list[Track], shape, box_pad=4.0):
-    """Export accepted tracks as YOLO-format boxes, one file per frame.
+def to_yolo_labels(tracks: list[Track], shape, box_pad=2.0, oriented=False):
+    """Export accepted tracks as YOLO labels, one entry per frame.
 
-    Returns {frame_index: [(cls, xc, yc, w, h), ...]} normalised to [0, 1].
+    oriented=False: {frame: [(cls, xc, yc, w, h), ...]} -- the standard YOLO
+        detect format: the tightest upright box around the streak.
+    oriented=True:  {frame: [(cls, x1, y1, x2, y2, x3, y3, x4, y4), ...]} --
+        the YOLO OBB format: the four corners of the rotated box that follows
+        the streak (detect.box_points), the best fit for a long diagonal streak.
+
+    Everything is normalised to [0, 1]. `box_pad` px of margin on every side
+    covers the faint glow at the streak's edges.
 
     These are the auto-labels -- but unlike the first attempt's, they were
     filtered by motion, so their errors are not the single-frame detector's
     errors baked into a training set.
     """
+    from .detect import box_points
+
     H, W = shape[:2]
     per_frame: dict[int, list] = {}
     for t in tracks:
         for d in t.dets:
-            side = max(d.L, 6.0) + 2 * box_pad
-            per_frame.setdefault(d.frame, []).append(
-                (0, d.x / W, d.y / H, side / W, side / H))
+            p = box_points(d, box_pad)
+            p[:, 0] = np.clip(p[:, 0], 0, W) / W
+            p[:, 1] = np.clip(p[:, 1], 0, H) / H
+            if oriented:
+                row = (0, *map(float, p.reshape(-1)))
+            else:
+                x0, y0 = p.min(0)
+                x1, y1 = p.max(0)
+                row = (0, float(x0 + x1) / 2, float(y0 + y1) / 2,
+                       float(x1 - x0), float(y1 - y0))
+            per_frame.setdefault(d.frame, []).append(row)
     return per_frame

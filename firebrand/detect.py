@@ -313,12 +313,50 @@ def residual_source(source, cfg: DetectConfig, roi_mask=None):
     yield from eng.flush()
 
 
-def draw(frame, dets, color=(90, 255, 90), pad=6, thickness=2):
+def box_points(d, pad=0.0):
+    """Corners of a detection's oriented box, as a (4, 2) float array (x, y).
+
+    This is the rotated rectangle cv2.minAreaRect fitted to the streak's pixels:
+    length L along theta, width W across it. A firebrand streak is long, thin
+    and usually diagonal, so this hugs it, where an upright box around the same
+    streak is mostly empty sky.
+
+    minAreaRect measures between pixel *centres*, so a 3 px wide streak comes
+    back as W = 2. The +1 restores the full pixel extent; `pad` then adds a
+    margin on every side for the faint glow at the edges of the streak.
+    """
+    size = (max(d.L, 0.0) + 1.0 + 2 * pad, max(d.W, 0.0) + 1.0 + 2 * pad)
+    return cv2.boxPoints(((d.x, d.y), size, float(np.rad2deg(d.theta))))
+
+
+def upright_box(d, pad=0.0):
+    """The tightest axis-aligned box around box_points: (x0, y0, x1, y1)."""
+    p = box_points(d, pad)
+    return float(p[:, 0].min()), float(p[:, 1].min()), float(p[:, 0].max()), float(p[:, 1].max())
+
+
+def draw(frame, dets, color=(90, 255, 90), pad=4, thickness=2, box="oriented"):
     """Overlay detections for eyeballing. Use this constantly -- most bugs in
-    this pipeline are visible in one frame and invisible in any metric."""
+    this pipeline are visible in one frame and invisible in any metric.
+
+    box="oriented" (default) draws the rotated box that follows the streak,
+    `pad` px clear of it so the box never covers the firebrand you are trying
+    to see. "upright" draws the axis-aligned box around that, "square" the
+    old fixed square centred on the streak.
+    """
     vis = frame.copy()
     for d in dets:
-        r = max(d.L, 6) / 2 + pad
-        cv2.rectangle(vis, (int(d.x - r), int(d.y - r)),
-                      (int(d.x + r), int(d.y + r)), color, thickness)
+        if box == "square":
+            r = max(d.L, 6) / 2 + pad + 2
+            cv2.rectangle(vis, (int(d.x - r), int(d.y - r)),
+                          (int(d.x + r), int(d.y + r)), color, thickness)
+            continue
+        if box == "upright":
+            x0, y0, x1, y1 = upright_box(d, pad)
+            p = np.array([[x0, y0], [x1, y0], [x1, y1], [x0, y1]])
+        else:
+            p = box_points(d, pad)
+        # shift=2: corners at 1/4 px, so a slowly turning box does not jitter
+        cv2.polylines(vis, [np.round(p * 4).astype(np.int32)], True, color,
+                      thickness, cv2.LINE_AA, shift=2)
     return vis

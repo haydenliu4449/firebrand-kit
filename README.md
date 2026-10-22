@@ -37,14 +37,22 @@ of camera shake. Ground truth exact by construction.
 
 ```
                               raw detector          after tracking       tracks
-shipped defaults          P=1.00  R=0.74         P=1.00  R=0.70      recall 0.62, frag 1.25, 2 ID switches
+shipped defaults          P=1.00  R=0.74         P=1.00  R=0.72      recall 0.69, frag 1.22, 2 ID switches
+  same, mirrored          P=1.00  R=0.74         P=1.00  R=0.72      recall 0.69, frag 1.22, 2 ID switches
+before 2026-10-08         P=1.00  R=0.74         P=1.00  R=0.70      recall 0.62, frag 1.25, 2 ID switches
+  same, mirrored          P=1.00  R=0.74         P=0.00  R=0.00      recall 0.00 -- no ember flying left was ever tracked
 before 2026-09-28         P=1.00  R=0.74         P=1.00  R=0.45      recall 0.54, frag 1.14, 0 ID switches
 ```
 
-The 2026-09-28 change (see "If the tags miss firebrands" below) cuts a track at
-one bad link instead of discarding all of it, and loosens the heading and
-brightness rules. Precision is unchanged; the cost is a little fragmentation
-and two ID switches on this benchmark.
+"Mirrored" is the same clip flipped left-right, so every ember flies the other
+way. Until 2026-10-08 the tracker could only follow embers moving rightward
+(see "If the tags miss firebrands" below); the generator only launches embers
+rightward, so the benchmark could not see it. It now runs both rows, and they
+should always match.
+
+The 2026-09-28 change cuts a track at one bad link instead of discarding all of
+it, and loosens the heading and brightness rules. Precision is unchanged; the
+cost is a little fragmentation and two ID switches on this benchmark.
 
 Reproduce with `python tests/benchmark.py --ablate --channels`.
 
@@ -202,9 +210,28 @@ in the Cloud Console and click a contact-sheet PNG.
 After `tag`, each clip has `work/tags/<clip>/` in the bucket: `tracks.csv` (one
 row per firebrand track, with a ballistic-fit residual), `detections.csv` (one
 row per detection: position, streak length and angle, brightness), `labels/`
-(YOLO boxes), `candidates.csv` (model detections that did not make it into a
-track) and, if the job ran with `-- --overlay`, `overlay.mp4`: green boxes are
-tagged firebrands, thin yellow boxes are detections the tracker dropped.
+and `labels_obb/` (YOLO boxes, see below), `candidates.csv` (model detections
+that did not make it into a track) and, if the job ran with `-- --overlay`,
+`overlay.mp4`: green boxes are tagged firebrands, thin yellow boxes are
+detections the tracker dropped.
+
+**The boxes follow the streak.** Each detection is a rotated rectangle fitted to
+the streak's pixels (`cv2.minAreaRect`): centre `x, y`, length `L` along the
+direction of motion, width `W` across it, angle `theta` in radians. Those five
+columns of `detections.csv` define the box exactly, so for analysis use them
+directly; the corners are
+`cv2.boxPoints(((x, y), (L + 1 + 2*pad, W + 1 + 2*pad), degrees(theta)))`.
+The overlay draws that box 4 px clear of the streak so it never covers the
+firebrand. The two label folders hold the same firebrands with 2 px of margin:
+
+| folder | format | fits |
+|---|---|---|
+| `labels_obb/` | YOLO OBB: `0 x1 y1 x2 y2 x3 y3 x4 y4` (corners, 0-1) | the rotated box: tight on any streak |
+| `labels/` | YOLO: `0 xc yc w h` (0-1) | the smallest upright box around it; a diagonal streak leaves empty corners |
+
+Before 2026-10-08 every box was an upright square sized by the streak length,
+about 4x the area of the streak's own box. Re-run `tag -- --force --overlay` to
+redraw old tags.
 
 There are three levels of checking, cheapest first:
 
@@ -252,8 +279,37 @@ Only frames both runs covered are compared. If detect ran with
 
 ### If the tags miss firebrands
 
-No false positives but many misses means something is too strict. Measured on
-40 frames of clip5 (4K), before the 2026-09-28 change:
+**Fixed 2026-10-08: embers flying left were never tracked.** With only one
+detection, the linker predicts the next position from the streak: its length
+gives the distance and its angle the direction. But a streak's angle cannot say
+which end is the head, and the code tried only one end. The angle comes back
+between -90 and +90 degrees, so that end always pointed right. An ember flying
+left never got its first link, and each of its detections was thrown away as a
+1-frame track. This applied to the model's tags too, since they go through
+the same tracker. On 50 frames of clip5, the same detections now give 657
+tracks instead of 589. 419 of them fly left, against 9 before, and the ballistic
+fit is tighter (median residual 1.44 px against 2.16). **Re-run `tag -- --force`**
+to get them; the model itself does not need retraining for this (training flips
+and rotates every tile, so it has always seen embers going every direction).
+The cost: in clutter (the benchmark with stabilisation off) trying both ends
+links about 12-15% more noise into tracks; with the shipped settings precision
+stays 1.00, and the eval step's empty-frame threshold accounts for it the next
+time `train` runs.
+
+**Still open: in a dense shower, a track can hop between embers.** Drawing a
+track's boxes on one image (the max of its frames) shows it at once. Many of
+the old linker's rightward tracks on clip5 jumped from ember to ember across
+the shower. They still passed every rule, because neighbouring embers in a
+shower fly parallel at similar speeds. The fix above removes the worst of it,
+but in a random sample of the new tracks about half still hop. **The contact
+sheets cannot show this:** each crop is a real firebrand, so a hopping track
+looks fine there. Until the linker checks each link against the streaks
+themselves (the step should lie along both streaks and be about `step_ratio`
+times their length), treat trajectories from dense showers with suspicion.
+Sparse scenes should suffer far less, since a hop needs a neighbour inside the
+gate, but that has not been measured.
+
+Measured on 40 frames of clip5 (4K), before the 2026-09-28 change:
 
 - **The tracker threw away more than it kept.** 181 tracks accepted, 311
   coherent tracks of 3 to 16 frames rejected. 193 of those failed the
@@ -328,55 +384,102 @@ bash scripts/04-submit_job.sh tag -- --force --overlay --min-track-conf 0.8
 Try 0.7 to 0.9 and compare the overlays. It can also drop a few genuinely
 faint tracks, so this is a stopgap.
 
-**The fix: show it real empty footage.** List frames where nothing is in view
-in `work/negatives.txt`:
+**The fix: show it real empty footage.** List stretches where nothing is in
+view in `work/negatives.txt`, as frame numbers or as times in the video:
 
 ```
-# clip   frames (0-based, inclusive) with NO firebrand anywhere in view
-clip3    0-150
-clip5    400-520, 900-1010
-clip8                       # the whole clip
+# clip         frames, or times as VLC shows them (m:ss or h:mm:ss)
+clip3          0-150
+clip5          400-520, 900-1010
+quiet_30min    0:00-6:40, 9:15-22:30
+clip8                                   # the whole clip
 ```
 
-`suggest_negatives.py` proposes stretches where the classical detector found
-nothing for 2 s or more, with the times to look at in the video, and flags
+**A long firebrand-free video is the best material there is**, as long as it
+comes from the same camera and view as the clips you tag (the mask is applied
+to it too). To use one:
+
+1. Put it in a `negclips/` folder next to `clips/`, not in `clips/`. Detect
+   and tag process everything in `clips/`, and at 4K they would spend many hours
+   on it for nothing. For a file of several GB, upload it in the Cloud Console
+   (Storage, your bucket, create folder `negclips`, Upload) rather than through
+   Cloud Shell, whose disk is 5 GB. `03-upload_inputs.sh` also uploads a local
+   `negclips/` folder.
+2. Watch it (2x speed is fine) and write the stretches with no firebrands into
+   `work/negatives.txt` as times, using the file name without `.mp4`. The edges
+   need not be exact: 0.25 s is trimmed off each end of a time range. Leave out
+   anything you are unsure of; every block that is used is checked anyway.
+3. Upload and retrain:
+
+```bash
+bash scripts/03-upload_inputs.sh        # uploads negatives.txt
+bash scripts/04-submit_job.sh train -- --force
+bash scripts/06-jobs.sh log fb-train-...  # the name 04 printed: the negatives lines, see below
+bash scripts/04-submit_job.sh tag -- --force --overlay
+```
+
+With that file, the train step:
+
+- **samples across all of it.** The listed footage is cut into 32-frame blocks.
+  Training takes the middle 16 frames of up to 40 blocks (`--max-neg-frames
+  640`) spread evenly over everything listed, so 30 minutes gives 40 different
+  moments (light, smoke, wind) rather than its first half-minute. Each block
+  costs a seek, not a decode from the start of the file.
+- **holds a quarter out.** Every 4th block is never trained on. The eval step
+  counts the tracks the model invents on up to 320 of those frames
+  (`--max-eval-neg-frames`) at every threshold, and picks the best threshold
+  that invents at most 1 per 100 frames (`--max-empty-fp`). Before 2026-10-22
+  that count was made on frames the model had trained on, which flatters it.
+- **checks every block first.** The classical detector runs on each block. If
+  anything in it forms a track, the block is not used and the log says where:
+  `!! quiet_30min 12:31.2-12:32.5 (frames ...): something moves like an ember --
+  12:31.4 at x=1204 y=880 (5 frames)`. Look at those times. If it is a
+  firebrand, take that stretch out of `negatives.txt`. If more than half the
+  blocks are dropped, something else in the scene moves (leaves, a flag, a
+  light).
+- **trains on what the model gets wrong.** If there is a model from an earlier
+  run, the train step (on the GPU) runs it on the firebrand-free frames and
+  takes tiles where it fires: up to half the real negatives (`--hard-negatives`,
+  `--mine-thresh 0.3`). The log line `the current model fired on N of M
+  firebrand-free frames` is the problem being fixed, measured; it should fall
+  from one training run to the next.
+- adds the real "nothing here" tiles (25% of the training set, `--neg-frac`),
+  and renders half the synthetic embers onto firebrand-free frames from the
+  blocks that passed the check, so those backgrounds carry your camera's real
+  noise without unlabelled real embers.
+
+Cost: each 4K frame takes a few seconds of CPU (the rolling median and edge
+map), so the defaults add roughly 20 to 40 minutes to a train job, well under a
+dollar. Worker processes share the training blocks; the held-out check reads
+one block at a time. `--max-neg-frames 1280` doubles the variety at double that
+cost.
+
+For short clips, `suggest_negatives.py` proposes stretches where the classical
+detector found nothing for 2 s or more, with the times to look at, and flags
 the ones where the model invented tracks:
 
 ```bash
 bash scripts/05-gcs_sync.sh review && bash scripts/05-gcs_sync.sh tags
 python3 suggest_negatives.py            # -> work/negatives.suggested.txt
 #   watch each stretch; copy the ones you agree with into work/negatives.txt
-bash scripts/03-upload_inputs.sh        # uploads negatives.txt
-bash scripts/04-submit_job.sh train -- --force
-bash scripts/04-submit_job.sh tag -- --force --overlay
 ```
 
-With that file, the train step:
-
-- adds real "nothing here" tiles from those frames (25% of the training set,
-  `--neg-frac`);
-- renders half the synthetic embers onto those firebrand-free frames, so the
-  backgrounds are your camera's real noise without unlabelled real embers. Every
-  clip now contributes backgrounds, and a sequence never jumps between clips;
-- counts the tracks the model invents on those frames at every threshold
-  (`report.json`, and printed), and picks the best threshold that invents at
-  most 1 per 100 empty frames (`--max-empty-fp`).
-
-**Only list frames you are sure are empty.** A frame with one faint real ember
-in it teaches the model that faint embers are background, which is the population
-your saltation contacts are in. A few confirmed seconds per clip are enough.
-When unsure, leave it out.
+**Only list stretches you are sure are empty.** A frame with one faint real
+ember in it teaches the model that faint embers are background, which is the
+population your saltation contacts are in. The check catches what the
+classical detector can see, not every faint ember. When unsure, leave it out.
 
 ### Where things live in the bucket
 
 ```
 gs://BUCKET_PATH/
   clips/                        your footage                    (03 uploads)
+  negclips/                     firebrand-free videos only      (Console or 03)
   masks/left_front.json         the mask named by MASK in .env  (03 uploads)
   work/clips/<clip>/            detect: tracks.csv, review/, audit.json, reject.txt
   work/data/tiles.npz           training tiles
   work/runs/streak/             best.pt, last.pt, history.json, report.json
-  work/tags/<clip>/             tag: tracks.csv, detections.csv, labels/, overlay.mp4
+  work/tags/<clip>/             tag: tracks.csv, detections.csv, labels/, labels_obb/, overlay.mp4
   work/logs/<job>/task<N>.log   the full output of every task
 ```
 
@@ -634,7 +737,7 @@ Writes to `work/eaton_01/`:
 | `tracks.csv` | one row per accepted track, with a ballistic-fit residual column |
 | `detections.csv` | one row per detection: x, y, streak length, orientation, flux |
 | `review/sheet_*.png` | contact sheets for verification |
-| `labels/*.txt` | YOLO-format boxes, one file per frame |
+| `labels/*.txt` | YOLO-format boxes (smallest upright box around the streak), one file per frame |
 | `overlay.mp4` | detections drawn on the clip |
 
 **Look at `overlay.mp4` before anything else.** Most bugs in this pipeline are
@@ -864,6 +967,7 @@ firebrand/
   train.py      training loop
   infer.py      sliding-window inference -> detections -> tracks
   evaluate.py   distance matching, track metrics, detectability filtering
+  negatives.py  firebrand-free footage: negatives.txt, sampling, held-out split, check
 make_mask.py     click-to-draw exclusion mask editor
 run_pipeline.py  CLI for stages 1-3, one clip
 run_all.py       every stage, resumable, shardable -- what Batch jobs run
@@ -872,6 +976,7 @@ evaluate_tags.py tagged real clips vs your verified tracks: recall, precision
 suggest_negatives.py proposes firebrand-free stretches for work/negatives.txt
 tests/benchmark.py   end-to-end benchmark and ablation
 tests/smoke_train.py torch path check, including resume (the `smoke` step)
+tests/test_negatives.py  sampling of firebrand-free footage (seconds, no video)
 
 Cloud Batch (the lab's gcp-example workflow)
 .env.example             project, bucket, region, machines (copy to .env)

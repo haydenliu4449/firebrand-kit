@@ -44,6 +44,7 @@ import argparse
 import json
 import os
 import pickle
+import shutil
 import sys
 import time
 import traceback
@@ -57,6 +58,7 @@ import pandas as pd
 from firebrand import Config, frames as F, detect as D, track as T, review as R
 from firebrand.config import SynthConfig
 from firebrand import synth as S, dataset as DS, evaluate as E, gcsio
+from firebrand import negatives as NG
 
 VIDEO_EXTS = {".mp4", ".avi", ".mov", ".mkv", ".m4v"}
 
@@ -344,121 +346,92 @@ def read_rejects(d: Path):
 
 
 # ---------------------------------------------------------------------------
-# real footage with NO firebrands: <work>/negatives.txt
+# real footage with NO firebrands: <work>/negatives.txt  (see firebrand/negatives.py)
 # ---------------------------------------------------------------------------
 
-def read_negatives(path: Path):
-    """<work>/negatives.txt -> {clip_stem: [(first, last), ...]}, None = whole clip.
-
-        # clip   frames (0-based, inclusive) where NO firebrand is anywhere in view
-        clip3    0-150
-        clip5    400-520, 900-1010
-        clip8                      # the whole clip
-
-    These are the only frames the kit can label with certainty without a
-    person drawing anything: if nothing is there, every pixel is "not a
-    firebrand". suggest_negatives.py proposes ranges; you confirm by watching.
-    """
-    out = {}
-    if not path.exists():
-        return out
-    for line in path.read_text().splitlines():
-        line = line.split("#", 1)[0].strip()
-        if not line:
+def neg_clip_paths(args):
+    """Clip stem -> file, from clips/ and negclips/. Long firebrand-free videos
+    belong in negclips/, which detect and tag never read."""
+    paths = {}
+    for spec in (args.neg_clips, args.clips):          # clips/ wins on a name clash
+        if not spec:
             continue
-        parts = line.replace(",", " ").split()
-        name, ranges = Path(parts[0]).stem, []
-        for tok in parts[1:]:
-            a, sep, b = tok.partition("-")
-            if not a.isdigit() or (sep and not b.isdigit()):
-                raise SystemExit(f"negatives.txt: cannot read {tok!r} in {line!r} -- "
-                                 f"use FIRST-LAST frame numbers, e.g. 120-300")
-            lo, hi = int(a), int(b) if sep else int(a)
-            ranges.append((min(lo, hi), max(lo, hi)))
-        out.setdefault(name, []).extend(ranges or [None])
-    return out
+        try:
+            paths.update({Path(c).stem: c for c in list_clips(spec)})
+        except SystemExit:
+            pass                                       # folder not there: fine
+    return paths
 
 
-def iter_negative_frames(args, cfg, specs, max_frames, work=None):
-    """Yield (clip, segment, frame_index, residual_stack, roi, clip_cfg) for the
-    frames listed in negatives.txt, at most `max_frames` of them in total.
-
-    Streamed one frame at a time: a 4K stack is 25 MB, so holding a few hundred
-    would not fit. Decoding starts half a median window early so the first
-    listed frame already has a real background behind it.
-    """
-    clips = {Path(c).stem: c for c in list_clips(args.clips)}
-    budget, seg = max_frames, 0
-    for name in sorted(specs):
-        if budget <= 0:
-            return
-        if name not in clips:
-            log(f"  negatives.txt: no clip called {name} in {args.clips} -- skipped")
-            continue
-        src = F.VideoSource(clips[name])
-        first = next(iter(src), None)
-        if first is None:
-            continue
-        H, W = first.shape[:2]
-        c = clip_config(cfg, W, H, src.fps)
-        det_cfg = Path(work or args.work) / "clips" / name / "config.json"
-        if det_cfg.exists():
-            c.detect.channel = Config.load(det_cfg).detect.channel
-        elif F.is_ir(first):
-            c.detect.channel = "gray"
-        roi = roi_for(args, first)
-        n_total = len(src) or 10 ** 9
-        for r in sorted(specs[name], key=lambda r: (-1, 0) if r is None else r):
-            if budget <= 0:
-                return
-            a, b = (0, n_total - 1) if r is None else r
-            b = min(b, a + budget - 1)
-            lo = max(0, a - c.detect.median_window)
-
-            def window(lo=lo, hi=b):
-                for i, f in enumerate(src):
-                    if i > hi:
-                        return
-                    if i >= lo:
-                        yield f
-
-            for k, stack in DS.residual_stacks(window(), c.detect, roi,
-                                               cfg.train.n_frames_stack):
-                fi = lo + k
-                if a <= fi <= b and budget > 0:
-                    budget -= 1
-                    yield name, seg, fi, stack, roi, c
-            seg += 1
-
-
-def count_negative_frames(args, specs):
-    clips = {Path(c).stem: c for c in list_clips(args.clips)}
-    n = 0
-    for name, ranges in specs.items():
-        if name not in clips:
-            continue
-        total = None
-        for r in ranges:
-            if r is None:
-                total = total or len(F.VideoSource(clips[name])) or 0
-                n += total
-            else:
-                n += r[1] - r[0] + 1
-    return n
-
-
-def read_run(args, clip_stem, first, n):
-    """n consecutive raw frames of one clip, from `first` on."""
-    path = {Path(c).stem: c for c in list_clips(args.clips)}.get(clip_stem)
-    if path is None:
+def negative_runs(args, work):
+    """negatives.txt -> every usable block of firebrand-free footage, with its
+    train/eval role (firebrand/negatives.py explains the sampling)."""
+    specs = NG.read_specs(work / "negatives.txt")
+    if not specs:
         return []
-    out = []
-    for i, f in enumerate(F.VideoSource(path)):
-        if i >= first + n:
-            break
-        if i >= first:
-            out.append(f)
-    return out
+    runs = NG.plan(NG.resolve(specs, neg_clip_paths(args), log=log))
+    NG.describe(runs, log=log)
+    return runs
+
+
+def camera_step_ratio(work):
+    """Median step ratio the detect stage measured over all clips (one camera,
+    one exposure), or None."""
+    vals = []
+    for f in (Path(work) / "clips").glob("*/done.json"):
+        try:
+            v = json.load(open(f)).get("step_ratio")
+        except (OSError, ValueError):
+            continue
+        if v:
+            vals.append(float(v))
+    return float(np.median(vals)) if vals else None
+
+
+class NegClipSetup:
+    """Per-clip settings for reading negatives: pixel limits scaled to the
+    clip, the channel and step ratio detect measured on it (or the camera's),
+    and the mask. Cached, since a long video gives dozens of runs."""
+
+    def __init__(self, args, cfg, work):
+        self.args, self.cfg, self.work = args, cfg, Path(work)
+        self.cam_ratio = camera_step_ratio(work)
+        self._cache = {}
+
+    def __call__(self, run):
+        if run.name not in self._cache:
+            src = F.VideoSource(run.path)
+            H, W = src.shape
+            c = clip_config(self.cfg, W, H, src.fps)
+            c.track.step_ratio = self.cam_ratio
+            det_cfg = self.work / "clips" / run.name / "config.json"
+            if det_cfg.exists():
+                m = Config.load(det_cfg)
+                c.detect.channel = m.detect.channel
+                c.track.step_ratio = m.track.step_ratio or self.cam_ratio
+            roi = roi_for(self.args, np.zeros((H, W, 3), np.uint8))
+            self._cache[run.name] = (c, roi)
+        return self._cache[run.name]
+
+
+def rng_pick(n, k, seed):
+    """k distinct indices out of n, sorted, reproducibly."""
+    if k <= 0 or n <= 0:
+        return np.zeros(0, int)
+    return np.sort(np.random.default_rng(seed).choice(n, min(k, n), replace=False))
+
+
+def want_mining(args, ck):
+    """Hard negatives need the previous model and, in practice, a GPU."""
+    if args.hard_negatives == "off" or not ck.exists():
+        return False
+    try:
+        import torch
+    except ImportError:
+        return False
+    if args.hard_negatives == "on":
+        return True
+    return torch.cuda.is_available()
 
 
 def stage_tiles(args, cfg):
@@ -529,77 +502,134 @@ def stage_tiles(args, cfg):
         f"exposure_duty {cfg.synth.exposure_duty:.3f}")
     roi = F.mask_from_spec((H, W), F.load_mask_spec(args.mask)) if args.mask else None
 
+    # Real negatives first: tiles of footage you confirmed has no firebrands,
+    # target all zero. Without them the model has only ever seen scenes WITH
+    # embers and fires on texture and noise when a clip goes quiet. Each run is
+    # checked with the classical detector before anything is taken from it, and
+    # the runs that pass also supply clean backgrounds for the synthetic embers.
+    runs = negative_runs(args, work)
+    setup = NegClipSetup(args, cfg, work)
+    neg_rand, neg_hard, clean_runs, dropped = [], [], [], []
+    used_frames = fired_frames = mined_frames = 0
+    if runs:
+        cands = NG.pick(runs, "train", args.max_neg_frames, run_len=16)
+        ck = work / "runs" / "streak" / "best.pt"
+        mine = want_mining(args, ck)
+        model = dev = None
+        if mine:
+            import torch
+            from firebrand import train as TR, infer as I
+            dev = "cuda" if torch.cuda.is_available() else "cpu"
+            model, mcfg = TR.load(ck, device=dev)
+            log(f"  hard negatives: the current model ({ck.name}) looks for what it "
+                f"mistakes for firebrands on this footage (threshold {args.mine_thresh})")
+        elif args.hard_negatives != "off" and ck.exists():
+            log("  hard negatives: skipped (no GPU here) -- the train step, which runs "
+                "on the GPU, does it")
+        tile, stride, n_stack = cfg.train.tile, cfg.train.stride, cfg.train.n_frames_stack
+
+        def jobs():
+            for r in cands:
+                c, nroi = setup(r)
+                yield NG.Job(run=r, dcfg=c.detect, tcfg=c.track, roi=nroi, n_stack=n_stack,
+                             tile=tile, stride=stride, rand_per_frame=6,
+                             keep_every=4 if mine else 0)
+
+        workers = args.neg_workers or NG.default_workers()
+        rng = np.random.default_rng(2)
+        with Timer(f"  reading firebrand-free footage: up to {args.max_neg_frames} frames "
+                   f"from {len(cands)} candidate runs ({workers} worker(s))"):
+            for res in NG.harvest_runs(jobs(), args.max_neg_frames, workers, log=log):
+                r = res["run"]
+                if res["moving"]:
+                    dropped.append(r)
+                    log(f"  !! {r.label()}: something moves like an ember -- "
+                        f"{res['moving']}. Not used. If it is a firebrand, take that "
+                        f"stretch out of negatives.txt.")
+                    continue
+                used_frames += res["n"]
+                neg_rand.append(res["tiles"])
+                if len(clean_runs) < 4 and r.n >= 12:
+                    clean_runs.append(r)
+                if model is not None:
+                    c, nroi = setup(r)
+                    c.train = mcfg
+                    for fi, stack in res["stacks"]:
+                        prob = I.predict_map(model, stack, mcfg.tile, mcfg.stride, dev)
+                        d = I.detections_from_map(prob, fi, c, args.mine_thresh, nroi)
+                        mined_frames += 1
+                        fired_frames += bool(d)
+                        neg_hard += NG.hard_tiles(d, stack, nroi, tile, 6, rng)
+        if model is not None:
+            del model
+            try:
+                torch.cuda.empty_cache()
+            except Exception:
+                pass
+        n_runs = len(neg_rand) + len(dropped)
+        log(f"  firebrand-free footage: {used_frames} frames from {len(neg_rand)} runs "
+            f"spread over the listed stretches; {len(dropped)} of {n_runs} runs dropped "
+            f"by the check")
+        if n_runs and len(dropped) > n_runs / 2:
+            log("  !! more than half the runs had something moving in them. Either the")
+            log("     stretches are not firebrand-free, or something else moves (a flag,")
+            log("     leaves, a light): watch the logged times.")
+        if mined_frames:
+            log(f"  hard negatives: the current model fired on {fired_frames} of "
+                f"{mined_frames} firebrand-free frames checked -> {len(neg_hard)} tiles "
+                f"of what it gets wrong")
+
     # Backgrounds: one run per clip (every clip, not just the first few), and
-    # -- better -- runs from frames you listed as having NO firebrands, which
-    # carry the camera's real noise without real embers that would otherwise
-    # be in the picture but labelled "not a firebrand". Half the chunks use
-    # those clean runs when there are any.
+    # -- better -- runs of footage with NO firebrands, which carry the camera's
+    # real noise without real embers that would otherwise be in the picture but
+    # labelled "not a firebrand". Half the chunks use those clean runs. They are
+    # read when a chunk needs them, not held in memory.
     def loader(paths):
         return lambda: [cv2.imread(str(q)) for q in paths]
 
-    runs = [loader(pths) for _name, pths in bg_runs
-            if cv2.imread(str(pths[0])).shape[:2] == (H, W)]
-    specs = read_negatives(work / "negatives.txt")
-    clean = []
-    for name in sorted(specs):
-        for r in specs[name][:2]:
-            if len(clean) >= 4:
-                break
-            a = 0 if r is None else r[0]
-            n = 16 if r is None else min(16, r[1] - r[0] + 1)
-            frames = read_run(args, name, a, n) if n >= 3 else []
-            if frames and frames[0].shape[:2] == (H, W):
-                clean.append(frames)
+    bg_list = [loader(pths) for _name, pths in bg_runs
+               if cv2.imread(str(pths[0])).shape[:2] == (H, W)]
+    clean = [(lambda r=r: NG.read_frames(r, 16)) for r in clean_runs
+             if F.VideoSource(r.path).shape == (H, W)]
     if clean:
         mixed = []
-        for i in range(max(len(runs), len(clean))):
-            mixed += [clean[i % len(clean)], runs[i % len(runs)]]
-        runs = mixed
+        for i in range(max(len(bg_list), len(clean))):
+            mixed += [clean[i % len(clean)], bg_list[i % len(bg_list)]]
+        bg_list = mixed
     log(f"  synthetic backgrounds: {len(bg_runs)} clip run(s)"
         + (f" + {len(clean)} firebrand-free run(s) from negatives.txt" if clean else
            "  (no negatives.txt -- backgrounds contain real, unlabelled embers)"))
 
     with Timer(f"  rendering {args.synth_frames} synthetic frames"):
-        X, Y, _sf, _sg = DS.build_from_synthetic(runs, args.synth_frames, cfg,
+        X, Y, _sf, _sg = DS.build_from_synthetic(bg_list, args.synth_frames, cfg,
                                                  seed=0, roi_mask=roi)
     log(f"  synthetic: {DS.tile_stats(X, Y)}")
 
-    # Real negatives: tiles of footage you confirmed has no firebrands, target
-    # all zero. Without them the model has only ever seen scenes WITH embers
-    # and fires on texture and noise when a clip goes quiet.
-    if specs:
+    # Mix: --neg-frac of all tiles from real firebrand-free footage, up to half
+    # of those from what the previous model got wrong, the rest at random.
+    if runs:
         n_target = int(round(len(X) * args.neg_frac / max(1e-6, 1 - args.neg_frac)))
-        rng = np.random.default_rng(1)
-        Xn, used_frames, tile = [], 0, cfg.train.tile
-        avail = min(count_negative_frames(args, specs), args.max_neg_frames)
-        per_frame = max(1, min(48, -(-n_target // max(1, avail))))
-        with Timer(f"  real negatives: up to {n_target} tiles from negatives.txt"):
-            for _clip, _seg, _fi, stack, nroi, _c in iter_negative_frames(
-                    args, cfg, specs, args.max_neg_frames, work):
-                if len(Xn) >= n_target:
-                    break
-                used_frames += 1
-                pos = DS.tile_positions(stack.shape[1:], tile, cfg.train.stride)
-                rng.shuffle(pos)
-                took = 0
-                for (y, x) in pos:
-                    if took >= per_frame or len(Xn) >= n_target:
-                        break
-                    if nroi is not None and (nroi[y:y + tile, x:x + tile] > 0).mean() < 0.5:
-                        continue
-                    Xn.append(stack[:, y:y + tile, x:x + tile])
-                    took += 1
-        if Xn:
-            Xn = np.array(Xn, np.uint8)
+        rand = np.concatenate([t for t in neg_rand if len(t)]) if any(len(t) for t in neg_rand) \
+            else np.zeros((0,) + X.shape[1:], np.uint8)
+        hard = np.array(neg_hard, np.uint8) if neg_hard else np.zeros((0,) + X.shape[1:], np.uint8)
+        n_hard = min(len(hard), n_target // 2)
+        n_rand = min(len(rand), n_target - n_hard)
+        n_hard = min(len(hard), n_target - n_rand)          # top up if random ran short
+        pick_h = rng_pick(len(hard), n_hard, 3)
+        pick_r = rng_pick(len(rand), n_rand, 4)
+        Xn = np.concatenate([hard[pick_h], rand[pick_r]]) if n_hard + n_rand else None
+        del rand, hard, neg_rand, neg_hard
+        if Xn is not None and len(Xn):
             X = np.concatenate([X, Xn])
             Y = np.concatenate([Y, np.zeros((len(Xn),) + Y.shape[1:], Y.dtype)])
-            log(f"  real negatives: {len(Xn)} tiles from {used_frames} firebrand-free "
-                f"frames ({len(Xn) / len(X):.0%} of all tiles)")
+            log(f"  real negatives: {len(Xn)} tiles ({n_hard} hard, {n_rand} random) from "
+                f"{used_frames} firebrand-free frames ({len(Xn) / len(X):.0%} of all tiles)")
         else:
-            log("  !! negatives.txt is there but gave no tiles -- check clip names and frames")
+            log("  !! negatives.txt is there but gave no tiles -- check clip names, "
+                "times and the dropped runs above")
     else:
         log("  !! no negatives.txt: the model will never see a scene with no firebrands.")
-        log("     List some firebrand-free frames (python suggest_negatives.py helps).")
+        log("     List some firebrand-free stretches (see README: firebrand-free footage).")
     log(f"  all tiles: {DS.tile_stats(X, Y)}")
     tiles_path.parent.mkdir(parents=True, exist_ok=True)
     DS.save_tiles(tiles_path, X, Y)
@@ -688,23 +718,49 @@ def stage_eval(args, cfg):
     # there. If negatives.txt lists firebrand-free frames, count the tracks the
     # model invents on them at every threshold, and pick the best-F1 threshold
     # that keeps that under --max-empty-fp per 100 frames.
-    specs = read_negatives(work / "negatives.txt")
+    runs = negative_runs(args, work)
+    eval_runs = NG.pick(runs, "eval", args.max_eval_neg_frames)
     empty = None
-    if specs:
+    if runs and not eval_runs:
+        log("  firebrand-free footage too short to hold any out -- the empty-frame check")
+        log("  is skipped (list a few more seconds of it in negatives.txt)")
+    if eval_runs:
         ths = [r["threshold"] for r in sweep]
         dets = {th: {} for th in ths}
         seg_cfg = {}
-        n_used = 0
-        with Timer("  false tracks on firebrand-free frames"):
-            for clip, seg, fi, stack, nroi, c in iter_negative_frames(
-                    args, cfg, specs, args.max_eval_neg_frames, work):
+        n_used = n_dropped = 0
+        setup = NegClipSetup(args, cfg, work)
+        with Timer(f"  false tracks on held-out firebrand-free footage "
+                   f"(up to {args.max_eval_neg_frames} frames)"):
+            for run in eval_runs:
+                if n_used >= args.max_eval_neg_frames:
+                    break
+                c, nroi = setup(run)
                 c.train = cfg.train
-                seg_cfg[(clip, seg)] = c
-                prob = I.predict_map(model, stack, cfg.train.tile, cfg.train.stride, dev)
+                classical, mine = {}, {th: {} for th in ths}
+                for fi, stack, edge in NG.run_frames(run, c.detect, nroi,
+                                                     cfg.train.n_frames_stack):
+                    classical[fi] = D.detect_frame(stack[stack.shape[0] // 2], fi,
+                                                   c.detect, edge)
+                    prob = I.predict_map(model, stack, cfg.train.tile, cfg.train.stride, dev)
+                    for th in ths:
+                        mine[th][fi] = I.detections_from_map(prob, fi, c, th, nroi)
+                moving = NG.moving_tracks(classical, c.track)
+                if moving:
+                    n_dropped += 1
+                    log(f"  !! {run.label()}: something moves like an ember -- "
+                        f"{NG.describe_tracks(moving, run)}. Not counted.")
+                    continue
+                key = (run.name, run.a)
+                seg_cfg[key] = c
                 for th in ths:
-                    dets[th].setdefault((clip, seg), {})[fi] = \
-                        I.detections_from_map(prob, fi, c, th, nroi)
-                n_used += 1
+                    dets[th][key] = mine[th]
+                n_used += len(classical)
+        if n_dropped:
+            log(f"  {n_dropped} held-out run(s) dropped by the check")
+        if not n_used:
+            log("  !! every held-out run was dropped -- the empty-frame check is skipped")
+    if eval_runs and n_used:
         rates = {}
         for th in ths:
             n_tr = 0
@@ -716,7 +772,8 @@ def stage_eval(args, cfg):
             rates[th] = 100.0 * n_tr / max(n_used, 1)
         for r in sweep:
             r["false_tracks_per_100_empty_frames"] = rates[r["threshold"]]
-        empty = {"frames": n_used, "max_allowed": args.max_empty_fp}
+        empty = {"frames": n_used, "max_allowed": args.max_empty_fp,
+                 "held_out": True, "runs_dropped_by_check": n_dropped}
         log(f"  {n_used} firebrand-free frames: false tracks per 100 frames")
         for r in sweep:
             log(f"    threshold {r['threshold']:.1f}   F1 {r['f1']:.3f}   "
@@ -772,7 +829,8 @@ def stage_tag(args, cfg):
     Output per clip in <work>/tags/<clip>/:
         tracks.csv       one row per accepted track (ballistic residual included)
         detections.csv   one row per detection, with track_id
-        labels/*.txt     YOLO boxes, one file per frame that has any
+        labels/*.txt     YOLO boxes (upright), one file per frame that has any
+        labels_obb/*.txt YOLO OBB boxes: the rotated box that follows the streak
         overlay.mp4      (with --overlay) detections drawn on the clip
         done.json        counts, threshold, and the classical count to compare
 
@@ -867,12 +925,17 @@ def stage_tag(args, cfg):
         cand = [d for v in dets.values() for d in v if id(d) not in in_acc]
         pd.DataFrame([d.as_dict() for d in cand], columns=list(D.Detection.__dataclass_fields__)) \
             .to_csv(out / "candidates.csv", index=False)
-        lab = out / "labels"
-        lab.mkdir(exist_ok=True)
-        for fi, boxes in T.to_yolo_labels(acc, (H, W)).items():
-            with open(lab / f"{fi:06d}.txt", "w") as fh:
-                for cl, xc, yc, bw, bh in boxes:
-                    fh.write(f"{cl} {xc:.6f} {yc:.6f} {bw:.6f} {bh:.6f}\n")
+        # Two label sets, same firebrands: labels/ is the standard upright YOLO
+        # box, labels_obb/ the rotated box that follows the streak (YOLO OBB).
+        for sub, oriented in (("labels", False), ("labels_obb", True)):
+            lab = out / sub
+            if lab.exists():                     # --force: no stale frames left
+                shutil.rmtree(lab)
+            lab.mkdir()
+            for fi, boxes in T.to_yolo_labels(acc, (H, W), oriented=oriented).items():
+                with open(lab / f"{fi:06d}.txt", "w") as fh:
+                    for cl, *v in boxes:
+                        fh.write(f"{cl} " + " ".join(f"{x:.6f}" for x in v) + "\n")
 
         if args.overlay:
             by, cby = {}, {}
@@ -976,10 +1039,21 @@ def main(argv=None):
     ap.add_argument("--neg-frac", type=float, default=0.25,
                     help="tiles: share of training tiles taken from firebrand-free "
                          "frames listed in <work>/negatives.txt")
-    ap.add_argument("--max-neg-frames", type=int, default=600,
-                    help="tiles: most firebrand-free frames to read")
-    ap.add_argument("--max-eval-neg-frames", type=int, default=200,
-                    help="eval: firebrand-free frames used to count false tracks")
+    ap.add_argument("--neg-clips", default="negclips/",
+                    help="folder of firebrand-free videos named in negatives.txt "
+                         "(detect and tag never read it)")
+    ap.add_argument("--max-neg-frames", type=int, default=640,
+                    help="tiles: firebrand-free frames to train on, in 16-frame runs "
+                         "spread over everything negatives.txt lists")
+    ap.add_argument("--max-eval-neg-frames", type=int, default=320,
+                    help="eval: held-out firebrand-free frames used to count false tracks")
+    ap.add_argument("--hard-negatives", choices=("auto", "on", "off"), default="auto",
+                    help="tiles: also train on the places the current model fires on "
+                         "firebrand-free footage (auto = when a model and a GPU are there)")
+    ap.add_argument("--mine-thresh", type=float, default=0.3,
+                    help="tiles: model probability that counts as firing, for hard negatives")
+    ap.add_argument("--neg-workers", type=int, default=0,
+                    help="tiles: processes reading firebrand-free footage (0 = auto)")
     ap.add_argument("--max-empty-fp", type=float, default=1.0,
                     help="eval: most false tracks per 100 firebrand-free frames "
                          "allowed when choosing the operating threshold")

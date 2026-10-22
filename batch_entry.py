@@ -11,6 +11,7 @@ inside the container the layout is:
 
     /mnt/disks/share/clips/        your footage          (scripts/03 uploads it)
     /mnt/disks/share/masks/        mask JSON files       (scripts/03 uploads it)
+    /mnt/disks/share/negclips/     firebrand-free videos (scripts/03 uploads it)
     /mnt/disks/share/work/         everything produced   (scripts/05 pulls it back)
     /mnt/disks/share/work/logs/<job>/task<N>.log   full log of every task
 
@@ -112,6 +113,7 @@ def build_command(mode, rest):
     if mode == "run":
         cmd = [py, "-u", str(APP / "run_all.py"),
                "--clips", str(SHARE / "clips"), "--work", str(WORK),
+               "--neg-clips", str(SHARE / "negclips"),
                "--shard", "auto"]
         if "--mask" not in rest and "--no-mask" not in rest:
             name = os.environ.get("FB_MASK", "left_front.json")

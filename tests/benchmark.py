@@ -53,6 +53,19 @@ def make_bench(width=960, n_frames=50, seed=1):
     return cfg, frames, gt
 
 
+def mirror(frames, gt):
+    """The same clip flipped left-right: every ember now flies the other way.
+
+    The generator launches embers rightward, so without this row the benchmark
+    cannot see a tracker that only follows one direction -- which is exactly
+    the bug it missed until 2026-10-08. The two rows should match closely.
+    """
+    W = frames[0].shape[1]
+    fl = [np.ascontiguousarray(f[:, ::-1]) for f in frames]
+    g2 = [[{**g, "x": W - 1 - g["x"], "theta": np.pi - g["theta"]} for g in fr] for fr in gt]
+    return fl, g2
+
+
 def run(cfg, frames, gt, label, stabilize=True, edge_suppress=None, verbose=True):
     c = Config()
     c.detect.__dict__.update(cfg.detect.__dict__)
@@ -147,7 +160,8 @@ def main():
     print(f"benchmark clip: {len(frames)} frames at {frames[0].shape[1]}x{frames[0].shape[0]}, "
           f"{n_gt} ground-truth streaks ({n_det} above the detectability floor)\n")
 
-    res = [run(cfg, frames, gt, "shipped defaults")]
+    res = [run(cfg, frames, gt, "shipped defaults"),
+           run(cfg, *mirror(frames, gt), "mirrored: embers fly left")]
 
     if args.ablate:
         print("\nablation -- each row removes one thing:\n")
@@ -172,6 +186,8 @@ def main():
     print("    that recall, which is the reason to train one at all.")
     print("  * id_switches should be 0. Anything above ~2 means the step_ratio")
     print("    estimate is off; check its sharpness or measure the exposure.")
+    print("  * the mirrored row should match the first: a tracker that prefers one")
+    print("    direction of travel loses every ember going the other way.")
     return res
 
 

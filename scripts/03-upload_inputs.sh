@@ -9,6 +9,9 @@
 #
 # What goes where:
 #   clips/*.mp4                   -> <bucket>/clips/
+#   negclips/*.mp4                -> <bucket>/negclips/  (firebrand-free videos; detect
+#                                    and tag skip them. A big one is quicker uploaded
+#                                    in the Cloud Console straight into negclips/.)
 #   masks/*.json                  -> <bucket>/masks/
 #   work/clips/<clip>/reject.txt  -> <bucket>/work/clips/<clip>/reject.txt
 #   work/negatives.txt            -> <bucket>/work/negatives.txt  (firebrand-free frames)
@@ -30,6 +33,14 @@ if [[ -d "${CLIPS_DIR}" ]]; then
   fi
 else
   warn "No clips folder at ${CLIPS_DIR} -- skipping footage."
+fi
+
+if [[ -d "${ROOT_DIR}/negclips" ]]; then
+  n=$(find "${ROOT_DIR}/negclips" -maxdepth 1 -type f | grep -Eic "${VIDEO_RE}" || true)
+  bold "Firebrand-free videos: ${n} file(s) in negclips/ -> ${GCS_ROOT}/negclips/"
+  if [[ "${n}" -gt 0 ]]; then
+    gc storage rsync "${ROOT_DIR}/negclips" "${GCS_ROOT}/negclips" --exclude='(?i)^(?!.*\.(mp4|avi|mov|mkv|m4v)$).*'
+  fi
 fi
 
 if [[ -d "${ROOT_DIR}/masks" ]]; then
@@ -61,4 +72,4 @@ fi
 
 echo
 bold "In the bucket now:"
-gc storage ls "${GCS_ROOT}/clips/" "${GCS_ROOT}/masks/" 2>/dev/null | sed 's/^/  /' | head -40
+gc storage ls "${GCS_ROOT}/clips/" "${GCS_ROOT}/negclips/" "${GCS_ROOT}/masks/" 2>/dev/null | sed 's/^/  /' | head -40

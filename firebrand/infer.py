@@ -73,9 +73,13 @@ def detections_from_map(prob, frame_index, cfg: Config, thresh=0.5, roi_mask=Non
             L, W = max(w, h), max(min(w, h), 1e-3)
             theta = np.deg2rad(ang if w >= h else ang + 90.0)
         else:
+            # Too few pixels for minAreaRect: the bounding box, exactly as the
+            # classical detector does it (a 1x3 blob is vertical, not horizontal).
             cx, cy = float(xs.mean()), float(ys.mean())
-            L, W, theta = float(max(stats[i, cv2.CC_STAT_WIDTH],
-                                    stats[i, cv2.CC_STAT_HEIGHT])), 1.0, 0.0
+            bw = float(stats[i, cv2.CC_STAT_WIDTH])
+            bh = float(stats[i, cv2.CC_STAT_HEIGHT])
+            L, W = max(bw, bh), max(min(bw, bh), 1e-3)
+            theta = 0.0 if bw >= bh else np.pi / 2
         if L < dcfg.min_length or L > dcfg.max_length:
             continue
         v = p8[ys, xs].astype(np.float32)

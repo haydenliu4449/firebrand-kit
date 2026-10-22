@@ -23,20 +23,26 @@ from .config import DetectConfig, TrainConfig
 # residual stacks
 # ---------------------------------------------------------------------------
 
-def residual_stacks(source, dcfg: DetectConfig, roi_mask=None, n_stack=3):
+def residual_stacks(source, dcfg: DetectConfig, roi_mask=None, n_stack=3,
+                    with_edge=False):
     """Yield (centre_frame_index, stack) where stack is (n_stack, H, W) uint8.
 
     n_stack must be odd; the centre channel is the frame being labelled.
+    with_edge=True yields (index, stack, edge_map_of_the_centre_frame), which is
+    what detect.detect_frame needs to run the classical detector on the centre.
     """
     assert n_stack % 2 == 1, "n_frames_stack must be odd"
     half = n_stack // 2
-    buf, idx = [], []
-    for i, res, _edge in D.residual_source(source, dcfg, roi_mask):
-        buf.append(res); idx.append(i)
+    buf, idx, edges = [], [], []
+    for i, res, edge in D.residual_source(source, dcfg, roi_mask):
+        buf.append(res); idx.append(i); edges.append(edge)
         if len(buf) > n_stack:
-            buf.pop(0); idx.pop(0)
+            buf.pop(0); idx.pop(0); edges.pop(0)
         if len(buf) == n_stack:
-            yield idx[half], np.stack(buf, 0)
+            if with_edge:
+                yield idx[half], np.stack(buf, 0), edges[half]
+            else:
+                yield idx[half], np.stack(buf, 0)
 
 
 # ---------------------------------------------------------------------------
