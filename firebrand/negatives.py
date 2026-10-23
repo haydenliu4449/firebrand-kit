@@ -185,6 +185,15 @@ class Run:
         return f"{self.name} {self.when()} (frames {self.a}-{self.b})"
 
 
+def is_heldout(name, frame, block=BLOCK, eval_every=EVAL_EVERY):
+    """True for frames in the held-out blocks of a clip: every 4th 32-frame
+    block, on the clip's own frame grid. The same rule decides which firebrand-
+    free frames the eval stage scores and which tagged frames are kept out of
+    training (evaluate_tags.py --heldout scores on exactly these)."""
+    phase = zlib.crc32(name.encode()) % eval_every
+    return (int(frame) // block + phase) % eval_every == 0
+
+
 def plan(spans, block=BLOCK, eval_every=EVAL_EVERY, min_len=MIN_RUN):
     """Cut the spans into blocks on a fixed grid of the clip's own frame numbers,
     and give each a role. The role depends only on the clip and the block's
@@ -192,12 +201,11 @@ def plan(spans, block=BLOCK, eval_every=EVAL_EVERY, min_len=MIN_RUN):
     possibly different budgets -- always agree on which frames are held out."""
     runs = []
     for s in spans:
-        phase = zlib.crc32(s.name.encode()) % eval_every
         for k in range(s.a // block, s.b // block + 1):
             a, b = max(s.a, k * block), min(s.b, k * block + block - 1)
             if b - a + 1 < min_len:
                 continue
-            role = "eval" if (k + phase) % eval_every == 0 else "train"
+            role = "eval" if is_heldout(s.name, k * block, block, eval_every) else "train"
             runs.append(Run(s.name, s.path, a, b, s.fps, role))
     return runs
 
@@ -413,10 +421,12 @@ def default_workers():
     return max(1, min(4, (os.cpu_count() or 2) // 2))
 
 
-def harvest_runs(jobs, budget, workers=1, log=print):
-    """Yield harvest() results in job order until `budget` usable frames are in
-    hand. Runs are independent, so they go to `workers` processes (spawned, not
-    forked: the parent may already hold a CUDA context)."""
+def harvest_runs(jobs, budget, workers=1, log=print, fn=harvest):
+    """Yield fn(job) results (default: harvest) in job order until `budget`
+    usable frames are in hand. Runs are independent, so they go to `workers`
+    processes (spawned, not forked: the parent may already hold a CUDA
+    context). fn must be a module-level function returning a dict with "n"
+    (frames read) and "moving" (None when the run is usable)."""
     from concurrent.futures.process import BrokenProcessPool
 
     jobs = iter(jobs)
@@ -425,7 +435,7 @@ def harvest_runs(jobs, budget, workers=1, log=print):
     def serial(todo):
         nonlocal kept
         for job in todo:
-            r = harvest(job)
+            r = fn(job)
             yield r
             if not r["moving"]:
                 kept += r["n"]
@@ -449,7 +459,7 @@ def harvest_runs(jobs, budget, workers=1, log=print):
                 job = next(jobs, None)
                 if job is None:
                     return
-                pending.append((job, ex.submit(harvest, job)))
+                pending.append((job, ex.submit(fn, job)))
 
         fill()
         while pending:

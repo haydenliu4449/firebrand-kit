@@ -5,6 +5,7 @@
     bash scripts/05-gcs_sync.sh tags        # the model's tags
     python evaluate_tags.py                 # every tagged clip
     python evaluate_tags.py --clip clip5 --overlay
+    python evaluate_tags.py --heldout       # only frames training never used
 
 The eval step (runs/streak/report.json) scores the model on SYNTHETIC embers,
 where ground truth is exact. This scores it on your real clips, where the only
@@ -61,6 +62,7 @@ import pandas as pd
 from firebrand import frames as F, gcsio
 from firebrand.detect import Detection
 from firebrand.evaluate import match_frame
+from firebrand.negatives import is_heldout
 from firebrand.track import Track
 
 DET_COLS = ["frame", "x", "y", "L", "W", "theta", "peak", "area", "flux"]
@@ -152,6 +154,14 @@ def evaluate_clip(work: Path, name: str, args):
     classical = read_dets(det_dir / "detections.csv")
     model = model[model.frame < n].reset_index(drop=True)
     classical = classical[classical.frame < n].reset_index(drop=True)
+    if args.heldout:
+        # Only the held-out blocks: frames that --real-positives never trains on.
+        model = model[[is_heldout(name, f) for f in model.frame]].reset_index(drop=True)
+        classical = classical[[is_heldout(name, f) for f in classical.frame]] \
+            .reset_index(drop=True)
+        last = n if n < 10 ** 9 else int(max(model.frame.max() if len(model) else 0,
+                                              classical.frame.max() if len(classical) else 0)) + 1
+        n = sum(is_heldout(name, f) for f in range(last))
 
     c_rejected = read_ids(det_dir / "reject.txt")
     m_rejected = read_ids(tag_dir / "reject.txt") or set()
@@ -296,6 +306,9 @@ def main(argv=None):
     ap.add_argument("--max-dist", type=float, default=5.0, help="match radius, px")
     ap.add_argument("--min-overlap", type=float, default=0.5,
                     help="fraction of a track's detections that must match")
+    ap.add_argument("--heldout", action="store_true",
+                    help="score only the held-out frames (every 4th 32-frame block), which "
+                         "training with --real-positives never uses -- the fair before/after")
     args = ap.parse_args(argv)
 
     work = Path(args.work)
@@ -333,9 +346,12 @@ def main(argv=None):
     df = pd.concat([df, pd.DataFrame([{"clip": "TOTAL", **tot}])], ignore_index=True)
 
     (work / "eval").mkdir(parents=True, exist_ok=True)
-    df.to_csv(work / "eval" / "summary.csv", index=False)
+    summary = work / "eval" / ("summary_heldout.csv" if args.heldout else "summary.csv")
+    df.to_csv(summary, index=False)
 
     print()
+    if args.heldout:
+        print("HELD-OUT FRAMES ONLY (every 4th 32-frame block; never trained on)")
     print(f"{'clip':10s} {'frames':>6s} {'verif':>5s} {'found':>5s} {'recall':>6s} "
           f"{'model':>5s} {'conf':>5s} {'false':>5s} {'only':>5s} {'precision':>13s} {'ball.med':>8s}")
     for r in df.to_dict("records"):
@@ -347,7 +363,7 @@ def main(argv=None):
               f"{fmt(r['recall_vs_verified']):>6s} {int(r['model_tracks']):5d} "
               f"{int(r['confirmed']):5d} {int(r['known_false']):5d} {int(r['model_only']):5d} "
               f"{prec:>13s} {fmt(r.get('ballistic_median_px')):>8s}")
-    print(f"\nwritten: {work / 'eval' / 'summary.csv'}")
+    print(f"\nwritten: {summary}")
 
     if not df.classical_reviewed.iloc[:-1].all():
         print("\n!! Some clips have no work/clips/<clip>/reject.txt, so their 'verified'")

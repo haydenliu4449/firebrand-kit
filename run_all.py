@@ -58,7 +58,7 @@ import pandas as pd
 from firebrand import Config, frames as F, detect as D, track as T, review as R
 from firebrand.config import SynthConfig
 from firebrand import synth as S, dataset as DS, evaluate as E, gcsio
-from firebrand import negatives as NG
+from firebrand import negatives as NG, reallabels as RL
 
 VIDEO_EXTS = {".mp4", ".avi", ".mov", ".mkv", ".m4v"}
 
@@ -421,6 +421,69 @@ def rng_pick(n, k, seed):
     return np.sort(np.random.default_rng(seed).choice(n, min(k, n), replace=False))
 
 
+def harvest_real(args, cfg, work, setup):
+    """Tiles around real firebrands: verified classical tracks + the model's
+    confident, unrejected tags, from the training blocks of every clip."""
+    total = dict(classical=0, model=0, both=0, too_wide=0)
+    lab_by, runs = {}, []
+    for clip in list_clips(args.clips):
+        name = Path(clip).stem
+        src = F.VideoSource(clip)
+        H, W = src.shape
+        labels, st = RL.clip_labels(work, name, args.real_min_conf,
+                                    max_w=6.0 * px_scale(W), dedupe_px=5.0 * px_scale(W))
+        if not labels:
+            continue
+        for k in total:
+            total[k] += st[k]
+        lab_by[name] = labels
+        runs += RL.label_runs(name, clip, float(src.fps or 24.0), labels,
+                              len(src) or max(labels) + 1)
+    empty = (np.zeros((0, cfg.train.n_frames_stack, cfg.train.tile, cfg.train.tile), np.uint8),
+             np.zeros((0, cfg.train.tile, cfg.train.tile), np.float32))
+    if not runs:
+        log("  !! --real-positives: no verified tracks or tags found -- run detect and tag first")
+        return empty
+    n_tag = sum((work / "tags" / n / "detections.csv").exists() for n in lab_by)
+    n_rev = sum(RL.review_is_current(work, n) for n in lab_by)
+    log(f"  real firebrands: {total['model']} tagged detections (confident, not rejected) "
+        f"+ {total['classical']} verified classical ones the model did not also tag, "
+        f"in {len(lab_by)} clip(s); {total['too_wide']} too wide to be one streak left out")
+    if n_tag and n_rev < n_tag:
+        log(f"  !! {n_tag - n_rev} tagged clip(s) have no work/tags/<clip>/reject.txt: the "
+            f"model's own mistakes there are trained on as firebrands. Review the "
+            f"model-only sheets from evaluate_tags.py first if you can.")
+    cands = NG.pick(runs, "train", args.real_frames, run_len=16)
+    tile, n_stack = cfg.train.tile, cfg.train.n_frames_stack
+
+    def jobs():
+        for r in cands:
+            c, nroi = setup(r)
+            lab = lab_by[r.name]
+            yield RL.PosJob(run=r, dcfg=c.detect, roi=nroi, n_stack=n_stack, tile=tile,
+                            labels={f: lab[f] for f in range(r.a, r.b + 1) if f in lab})
+
+    workers = args.neg_workers or NG.default_workers()
+    Xs, Ys, used, n_lab, removed = [], [], 0, 0, 0
+    with Timer(f"  reading real firebrands: up to {args.real_frames} frames from "
+               f"{len(cands)} training blocks ({workers} worker(s))"):
+        for res in NG.harvest_runs(jobs(), args.real_frames, workers, log=log,
+                                   fn=RL.harvest_pos):
+            used += res["n"]
+            n_lab += res["n_labels"]
+            removed += res["removed"]
+            if len(res["X"]):
+                Xs.append(res["X"])
+                Ys.append(res["Y"])
+    if not Xs:
+        log("  !! --real-positives: no tiles -- check the mask and the tags")
+        return empty
+    log(f"  real firebrands: {sum(len(x) for x in Xs)} tiles from {used} frames, "
+        f"{n_lab} labelled embers; {removed} unlabelled blobs removed from the "
+        f"labelled frames so they are not taught as background")
+    return np.concatenate(Xs), np.concatenate(Ys)
+
+
 def want_mining(args, ck):
     """Hard negatives need the previous model and, in practice, a GPU."""
     if args.hard_negatives == "off" or not ck.exists():
@@ -549,7 +612,7 @@ def stage_tiles(args, cfg):
                     continue
                 used_frames += res["n"]
                 neg_rand.append(res["tiles"])
-                if len(clean_runs) < 4 and r.n >= 12:
+                if len(clean_runs) < 8 and r.n >= 12:
                     clean_runs.append(r)
                 if model is not None:
                     c, nroi = setup(r)
@@ -579,11 +642,12 @@ def stage_tiles(args, cfg):
                 f"{mined_frames} firebrand-free frames checked -> {len(neg_hard)} tiles "
                 f"of what it gets wrong")
 
-    # Backgrounds: one run per clip (every clip, not just the first few), and
-    # -- better -- runs of footage with NO firebrands, which carry the camera's
-    # real noise without real embers that would otherwise be in the picture but
-    # labelled "not a firebrand". Half the chunks use those clean runs. They are
-    # read when a chunk needs them, not held in memory.
+    # Backgrounds for the synthetic embers. A clip's own frames are full of real
+    # embers nobody labelled, and every one of them is then taught as "not a
+    # firebrand" -- the opposite of what you want. Firebrand-free runs from
+    # negatives.txt (checked above) carry the camera's real noise without that:
+    # with 4 or more of them, they are the only backgrounds; with fewer, they
+    # take half the chunks. Read when a chunk needs them, not held in memory.
     def loader(paths):
         return lambda: [cv2.imread(str(q)) for q in paths]
 
@@ -591,19 +655,39 @@ def stage_tiles(args, cfg):
                if cv2.imread(str(pths[0])).shape[:2] == (H, W)]
     clean = [(lambda r=r: NG.read_frames(r, 16)) for r in clean_runs
              if F.VideoSource(r.path).shape == (H, W)]
-    if clean:
+    if len(clean) >= 4:
+        bg_list = clean
+        log(f"  synthetic backgrounds: {len(clean)} firebrand-free run(s) from "
+            f"negatives.txt only (clip frames would teach real embers as background)")
+    elif clean:
         mixed = []
         for i in range(max(len(bg_list), len(clean))):
             mixed += [clean[i % len(clean)], bg_list[i % len(bg_list)]]
         bg_list = mixed
-    log(f"  synthetic backgrounds: {len(bg_runs)} clip run(s)"
-        + (f" + {len(clean)} firebrand-free run(s) from negatives.txt" if clean else
-           "  (no negatives.txt -- backgrounds contain real, unlabelled embers)"))
+        log(f"  synthetic backgrounds: {len(bg_runs)} clip run(s) + {len(clean)} "
+            f"firebrand-free run(s) from negatives.txt")
+    else:
+        log(f"  synthetic backgrounds: {len(bg_runs)} clip run(s)  (no negatives.txt -- "
+            f"they contain real, unlabelled embers)")
 
     with Timer(f"  rendering {args.synth_frames} synthetic frames"):
         X, Y, _sf, _sg = DS.build_from_synthetic(bg_list, args.synth_frames, cfg,
                                                  seed=0, roi_mask=roi)
     log(f"  synthetic: {DS.tile_stats(X, Y)}")
+
+    # Real firebrands (--real-positives): tiles from your clips around verified
+    # and tagged embers, --real-frac of the final set (firebrand/reallabels.py).
+    if args.real_positives:
+        Xr, Yr = harvest_real(args, cfg, work, setup)
+        if len(Xr):
+            n_total = len(X) / max(1e-6, 1 - args.neg_frac - args.real_frac)
+            n_real = min(len(Xr), int(round(n_total * args.real_frac)))
+            pick = rng_pick(len(Xr), n_real, 5)
+            X = np.concatenate([X, Xr[pick]])
+            Y = np.concatenate([Y, Yr[pick].astype(Y.dtype)])
+            log(f"  real firebrands: {n_real} tiles of {len(Xr)} available "
+                f"({n_real / len(X):.0%} of the tiles so far)")
+        del Xr, Yr
 
     # Mix: --neg-frac of all tiles from real firebrand-free footage, up to half
     # of those from what the previous model got wrong, the rest at random.
@@ -868,6 +952,15 @@ def stage_tag(args, cfg):
             log(f"  {name}: already tagged, skipping (use --force to redo)")
             continue
         out.mkdir(parents=True, exist_ok=True)
+        # Same as detect: re-tagging renumbers the model's tracks, so a review of
+        # the old ones would reject the wrong tracks (and --real-positives would
+        # train on what you rejected). Move it aside; it is your work.
+        old_rej = out / "reject.txt"
+        if old_rej.exists():
+            moved = out / f"reject.before-{time.strftime('%Y%m%d-%H%M%S')}.txt"
+            old_rej.rename(moved)
+            log(f"  {name}: moved the old tags reject.txt to {moved.name} -- track IDs "
+                f"change when a clip is re-tagged")
 
         src = F.VideoSource(clip)
 
@@ -1052,6 +1145,16 @@ def main(argv=None):
                          "firebrand-free footage (auto = when a model and a GPU are there)")
     ap.add_argument("--mine-thresh", type=float, default=0.3,
                     help="tiles: model probability that counts as firing, for hard negatives")
+    ap.add_argument("--real-positives", action="store_true",
+                    help="tiles: also train on REAL firebrands -- your verified classical "
+                         "tracks and the model's confident, unrejected tags")
+    ap.add_argument("--real-frames", type=int, default=640,
+                    help="tiles: frames of real footage to take firebrands from")
+    ap.add_argument("--real-frac", type=float, default=0.3,
+                    help="tiles: share of the training set from real firebrands")
+    ap.add_argument("--real-min-conf", type=float, default=0.8,
+                    help="tiles: a tagged track counts only if the model's probability "
+                         "reached this on one of its detections")
     ap.add_argument("--neg-workers", type=int, default=0,
                     help="tiles: processes reading firebrand-free footage (0 = auto)")
     ap.add_argument("--max-empty-fp", type=float, default=1.0,

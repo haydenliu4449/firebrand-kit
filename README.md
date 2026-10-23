@@ -363,6 +363,76 @@ Reading the new overlay tells you where any remaining misses are lost:
 job, without rebuilding: `bash scripts/04-submit_job.sh tag -- --force --overlay
 --set track.max_gap=3`. It is logged at the top of the job's output.
 
+### Train on your own tags: more firebrands each round
+
+Until 2026-10-23 every firebrand the model trained on was synthetic. Your
+verified tracks were used only to tune the generator. Real embers differ from
+painted ones (shape, glow, compression, blur), and the way to teach that
+difference is to train on real ones. You already have them: your verified
+classical tracks, and the model's own tags. `--real-positives` turns both into
+training tiles:
+
+```bash
+# 0. a baseline, on frames the next model will not train on
+bash scripts/05-gcs_sync.sh review && bash scripts/05-gcs_sync.sh tags
+python3 evaluate_tags.py --heldout --no-sheets        # note the recall and model columns
+
+# 1. recommended: review the model's own tracks
+python3 evaluate_tags.py                              # contact sheets of model-only tracks
+#    open work/eval/<clip>/model_only/sheet_*.png and write the IDs that are
+#    NOT firebrands into work/tags/<clip>/reject.txt
+bash scripts/03-upload_inputs.sh                      # uploads those reject.txt files
+
+# 2. train on real firebrands as well as synthetic ones
+bash scripts/04-submit_job.sh train -- --force --real-positives
+
+# 3. tag again and compare on the same held-out frames
+bash scripts/04-submit_job.sh tag -- --force --overlay
+rm -rf work/tags && bash scripts/05-gcs_sync.sh review && bash scripts/05-gcs_sync.sh tags
+python3 evaluate_tags.py --heldout --no-sheets
+```
+
+Repeat steps 1 to 3: each round's tags include embers the previous model found
+and the classical detector never did, and they become the next round's labels.
+If Cloud Shell says `No module named cv2`, run
+`pip3 install --user opencv-python-headless scipy pandas` once.
+
+What the train step does with `--real-positives`:
+
+- **Labels:** the verified classical tracks (minus `work/clips/<clip>/reject.txt`),
+  plus the model's tagged tracks, minus `work/tags/<clip>/reject.txt` and minus
+  any track whose best detection is below 0.8 probability (`--real-min-conf`).
+  Where both found the same ember, the model's thinner outline is used.
+  Detections too wide to be one streak (neighbours merged) are left out.
+- **Unlabelled embers are removed, not taught as background.** A real frame
+  always holds embers nobody labelled. In the frame being labelled, every
+  ember-bright spot that is not within 4 px of a label is set to zero, with its
+  glow. Faint specks of camera noise stay. Without this, training on real
+  frames would push recall down.
+- **Held-out frames are never used:** every 4th 32-frame block of each clip,
+  the same rule as for firebrand-free footage. `evaluate_tags.py --heldout`
+  scores exactly those frames, so before and after are compared on frames
+  neither model trained on.
+- **Mix:** 30% of the training set from real firebrands (`--real-frac`), 640
+  frames read (`--real-frames`, about 20 to 30 extra minutes), 25% firebrand-free,
+  the rest synthetic.
+
+**Review the model's tracks if you can.** Every model track you do not reject
+is trained on as a firebrand, its mistakes included, and training on its own
+mistakes makes them stronger. Reviewing the model-only sheets is the guard;
+`--real-min-conf 0.9` is a cruder one. Re-tagging renumbers tracks, so the tag
+step moves an old `work/tags/<clip>/reject.txt` aside, and a review older than
+the tags is ignored.
+
+**It helps the misses with no box at all.** A real firebrand with a thin yellow
+box was seen by the model and dropped by the tracker; more training will not
+fix that (see the table above).
+
+Also changed on 2026-10-23, with or without `--real-positives`: when
+`negatives.txt` gives at least 4 checked firebrand-free runs, the synthetic
+embers are painted only onto those. Clip frames are full of real embers nobody
+labelled, and painting onto them taught each one as "not a firebrand".
+
 ### If the model tags things when there are no firebrands
 
 Spontaneous tags on quiet footage mean the model has never been shown a scene
@@ -968,6 +1038,7 @@ firebrand/
   infer.py      sliding-window inference -> detections -> tracks
   evaluate.py   distance matching, track metrics, detectability filtering
   negatives.py  firebrand-free footage: negatives.txt, sampling, held-out split, check
+  reallabels.py real firebrands as labels: verified tracks + reviewed tags
 make_mask.py     click-to-draw exclusion mask editor
 run_pipeline.py  CLI for stages 1-3, one clip
 run_all.py       every stage, resumable, shardable -- what Batch jobs run
@@ -977,6 +1048,7 @@ suggest_negatives.py proposes firebrand-free stretches for work/negatives.txt
 tests/benchmark.py   end-to-end benchmark and ablation
 tests/smoke_train.py torch path check, including resume (the `smoke` step)
 tests/test_negatives.py  sampling of firebrand-free footage (seconds, no video)
+tests/test_reallabels.py training on real firebrands (seconds, no video)
 
 Cloud Batch (the lab's gcp-example workflow)
 .env.example             project, bucket, region, machines (copy to .env)

@@ -14,6 +14,8 @@
 #                                    in the Cloud Console straight into negclips/.)
 #   masks/*.json                  -> <bucket>/masks/
 #   work/clips/<clip>/reject.txt  -> <bucket>/work/clips/<clip>/reject.txt
+#   work/tags/<clip>/reject.txt   -> <bucket>/work/tags/<clip>/reject.txt  (your review
+#                                    of the model's tags; --real-positives skips those)
 #   work/negatives.txt            -> <bucket>/work/negatives.txt  (firebrand-free frames)
 #
 # Nothing else under work/ is uploaded: the bucket's copy of work/ is the one
@@ -59,16 +61,21 @@ if [[ -f "${ROOT_DIR}/work/negatives.txt" ]]; then
 fi
 
 shopt -s nullglob
-rejects=("${ROOT_DIR}"/work/clips/*/reject.txt)
-if (( ${#rejects[@]} )); then
-  bold "Review decisions: ${#rejects[@]} reject.txt file(s)"
+for kind in clips tags; do
+  rejects=("${ROOT_DIR}"/work/${kind}/*/reject.txt)
+  (( ${#rejects[@]} )) || continue
+  if [[ "${kind}" == clips ]]; then
+    bold "Review decisions (classical tracks): ${#rejects[@]} reject.txt file(s)"
+  else
+    bold "Review decisions (the model's tags): ${#rejects[@]} reject.txt file(s)"
+  fi
   for f in "${rejects[@]}"; do
     clip=$(basename "$(dirname "${f}")")
     ids=$(tr ',\r\n' '   ' < "${f}" | wc -w | tr -d ' ')
-    gc storage cp "${f}" "${GCS_ROOT}/work/clips/${clip}/reject.txt" --quiet
+    gc storage cp "${f}" "${GCS_ROOT}/work/${kind}/${clip}/reject.txt" --quiet
     echo "  ${clip}: ${ids} track(s) rejected"
   done
-fi
+done
 
 echo
 bold "In the bucket now:"
