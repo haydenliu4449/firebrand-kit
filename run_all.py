@@ -213,6 +213,18 @@ def roi_for(args, first):
     return None
 
 
+def write_track_csvs(out, tracks, tcfg):
+    """tracks.csv and detections.csv, with a header even when there are no
+    tracks. (An empty DataFrame writes a bare newline, which pandas then
+    refuses to read: "No columns to parse from file".)"""
+    rows = T.summarize(tracks, tcfg)
+    pd.DataFrame(rows, columns=None if rows else ["track_id"]) \
+        .to_csv(out / "tracks.csv", index=False)
+    pd.DataFrame([{**d.as_dict(), "track_id": t.id} for t in tracks for d in t.dets],
+                 columns=list(D.Detection.__dataclass_fields__) + ["track_id"]) \
+        .to_csv(out / "detections.csv", index=False)
+
+
 def stage_detect(args, cfg):
     clips = my_clips(args)
 
@@ -283,9 +295,7 @@ def stage_detect(args, cfg):
         log(f"  {name}: {sum(len(v) for v in dets.values())} candidates -> "
             f"{len(acc)} accepted tracks, {len(rej)} rejected")
 
-        pd.DataFrame(T.summarize(acc, c.track)).to_csv(out / "tracks.csv", index=False)
-        pd.DataFrame([{**d.as_dict(), "track_id": t.id} for t in acc for d in t.dets]) \
-            .to_csv(out / "detections.csv", index=False)
+        write_track_csvs(out, acc, c.track)
         if rej:
             pd.DataFrame(T.summarize(rej, c.track)).to_csv(out / "negatives.csv",
                                                            index=False)
@@ -1007,9 +1017,7 @@ def stage_tag(args, cfg):
             log(f"  {name}: --min-track-conf {args.min_track_conf}: kept "
                 f"{len(acc)} of {before} tracks")
 
-        pd.DataFrame(T.summarize(acc, c.track)).to_csv(out / "tracks.csv", index=False)
-        pd.DataFrame([{**d.as_dict(), "track_id": t.id} for t in acc for d in t.dets]) \
-            .to_csv(out / "detections.csv", index=False)
+        write_track_csvs(out, acc, c.track)
         # Everything the model detected that did NOT end up in an accepted
         # track. When the overlay misses a firebrand, this says why: a yellow
         # box on it means the model saw it and the tracker dropped it; no box

@@ -76,10 +76,19 @@ def read_ids(path: Path):
     return {int(t) for t in txt if t.strip().lstrip("-").isdigit()}
 
 
+def read_csv_or_empty(path: Path):
+    """A CSV the kit wrote, or an empty table: a clip with no tracks used to
+    get a file holding only a newline, which pandas will not read."""
+    if not path.exists():
+        return pd.DataFrame()
+    try:
+        return pd.read_csv(path)
+    except pd.errors.EmptyDataError:
+        return pd.DataFrame()
+
+
 def read_dets(path: Path):
-    if not path.exists() or path.stat().st_size == 0:
-        return pd.DataFrame(columns=DET_COLS + ["track_id"])
-    df = pd.read_csv(path)
+    df = read_csv_or_empty(path)
     return df if len(df) else pd.DataFrame(columns=DET_COLS + ["track_id"])
 
 
@@ -209,11 +218,11 @@ def evaluate_clip(work: Path, name: str, args):
         prec_hi = (n_model - len(known_false)) / n_model if n_model else float("nan")
 
     # physics check, free: ballistic residual of the model's tracks
-    ball = pd.read_csv(tag_dir / "tracks.csv") if (tag_dir / "tracks.csv").exists() \
-        and (tag_dir / "tracks.csv").stat().st_size else pd.DataFrame()
+    ball = read_csv_or_empty(tag_dir / "tracks.csv")
     if len(ball) and "frame_start" in ball:
         ball = ball[ball.frame_start < n]
-    res = ball["ballistic_rms_px"].to_numpy() if len(ball) else np.array([])
+    res = ball["ballistic_rms_px"].to_numpy() if len(ball) and "ballistic_rms_px" in ball \
+        else np.array([])
 
     row = dict(
         clip=name, frames_compared=int(n or 0),

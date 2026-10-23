@@ -41,18 +41,25 @@ def clock(sec):
     return f"{int(sec // 60)}:{sec % 60:04.1f}"
 
 
+def read_csv_or_empty(path: Path):
+    """A CSV the kit wrote, or an empty table: a clip with no tracks used to
+    get a file holding only a newline, which pandas will not read."""
+    if not path.exists():
+        return pd.DataFrame()
+    try:
+        return pd.read_csv(path)
+    except pd.errors.EmptyDataError:
+        return pd.DataFrame()
+
+
 def frames_with(path: Path):
-    if not path.exists() or path.stat().st_size == 0:
-        return set()
-    df = pd.read_csv(path)
+    df = read_csv_or_empty(path)
     return set(df["frame"].astype(int)) if "frame" in df and len(df) else set()
 
 
 def tracks_in(path: Path, a: int, b: int):
-    if not path.exists() or path.stat().st_size == 0:
-        return 0
-    df = pd.read_csv(path)
-    if not len(df):
+    df = read_csv_or_empty(path)
+    if not len(df) or "frame" not in df:
         return 0
     inside = df[(df.frame >= a) & (df.frame <= b)]
     return int(inside["track_id"].nunique()) if len(inside) else 0

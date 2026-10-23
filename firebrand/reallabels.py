@@ -52,6 +52,18 @@ def _ids(path: Path):
     return {int(t) for t in txt if t.strip().lstrip("-").isdigit()}
 
 
+def read_csv_or_empty(path: Path):
+    """A CSV the kit wrote, or an empty table. A clip with no tracks used to
+    get a file holding only a newline, which pandas will not read."""
+    path = Path(path)
+    if not path.exists():
+        return pd.DataFrame()
+    try:
+        return pd.read_csv(path)
+    except pd.errors.EmptyDataError:
+        return pd.DataFrame()
+
+
 def _rows(dets):
     return np.array([[d.x, d.y, d.L, d.W, d.theta] for d in dets], np.float32).reshape(-1, 5)
 
@@ -85,17 +97,15 @@ def clip_labels(work, name, min_conf=0.8, max_w=12.0, dedupe_px=10.0):
             for d in t.dets:
                 per.setdefault(d.frame, {"c": [], "m": []})["c"].append(d)
 
-    tags = work / "tags" / name / "detections.csv"
-    if tags.exists() and tags.stat().st_size > 0:
-        df = pd.read_csv(tags)
-        if len(df):
-            rej = _ids(work / "tags" / name / "reject.txt") \
-                if review_is_current(work, name) else set()
-            conf = df.groupby("track_id")["peak"].max() >= 255.0 * min_conf
-            ok = set(conf[conf].index.astype(int)) - rej
-            df = df[df.track_id.astype(int).isin(ok)]
-            for r in df.itertuples():
-                per.setdefault(int(r.frame), {"c": [], "m": []})["m"].append(r)
+    df = read_csv_or_empty(work / "tags" / name / "detections.csv")
+    if len(df) and "track_id" in df:         # a clip the model tagged nothing in has none
+        rej = _ids(work / "tags" / name / "reject.txt") \
+            if review_is_current(work, name) else set()
+        conf = df.groupby("track_id")["peak"].max() >= 255.0 * min_conf
+        ok = set(conf[conf].index.astype(int)) - rej
+        df = df[df.track_id.astype(int).isin(ok)]
+        for r in df.itertuples():
+            per.setdefault(int(r.frame), {"c": [], "m": []})["m"].append(r)
 
     out = {}
     for f, g in per.items():
