@@ -23,3 +23,8 @@ __pycache__/
 
 # NOTE: this used to ignore *.json, which silently kept masks/*.json -- and
 # now templates/*.json, the Batch job templates -- out of the repo.
+
+# Claude Code: personal settings and notes stay out of git (CLAUDE.md and
+# .claude/settings.json, .claude/skills/ are shared and committed)
+.claude/settings.local.json
+CLAUDE.local.md
