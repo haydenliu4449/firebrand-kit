@@ -265,6 +265,14 @@ window of the top band (y 0-768), clip5 frames 80-119 and clip9 140-179:
 - Eval now picks the lowest threshold within `--max-empty-fp` on firebrand-free
   footage, not best F1: the sweep paints on frames with real unlabelled embers,
   so F1 counted real finds as errors and always chose 0.8.
+- **Mask v2** (`masks/left_front_v2.json`; the original stays as `left_front.json`).
+  Classical tracks with no mask, top-left 2100x1200, 60 frames each of 5 ember
+  clips and 4 stretches of the firebrand-free video. False tracks sat on the trees,
+  car and house; lawn, walk and hedge were nearly silent. Reopened those, plus the
+  top strip past the house, and closed the roof above it. Open frame 77.5% -> 80.8%.
+  In that area: ember-clip tracks 3142 -> 3559 (443 reopened, 26 closed); tracks on
+  empty video 137 -> 20 (7 of them in the reopened part, 240 frames). Classical
+  tracks, not the model's; the eval stage's empty-footage count is the check on it.
 - Not verified: real recall. Counts above are tracks, not firebrands confirmed.
   Next: rebuild, tag, then `evaluate_tags.py --heldout`. Detect also picks up
   `split_frac` if rerun, which would change the classical labels.

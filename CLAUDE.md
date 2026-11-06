@@ -108,9 +108,9 @@ modules: `pip3 install --user opencv-python-headless scipy pandas`.
 - Legacy, don't use: `cloud/` (old Workbench VM scripts), `notebooks/`
 
 ## Last known state (2026-11-06)
-- Recall work (approach.md finding 9) is committed locally and NOT pushed: the
-  user pushes. Effect on real recall unmeasured. Next: user pushes → rebuild
-  image → `tag -- --force --overlay` → `evaluate_tags.py --heldout`.
+- Recall work (approach.md finding 9) pushed and image rebuilt 2026-11-06. Mask
+  is now `masks/left_front_v2.json` (`MASK` in `.env`). Effect on real recall
+  unmeasured. Next: `tag -- --force --overlay` → `evaluate_tags.py --heldout`.
 - Negatives: 30-min firebrand-free video `D01_20250107230423` in `negclips/`
   (3 stretches, ~26 s) in `work/negatives.txt`.
 - Open: `--real-positives` retrain not reported; track identity in dense showers
