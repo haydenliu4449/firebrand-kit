@@ -49,9 +49,17 @@ def predict_map(model, stack, tile=256, stride=192, device="cpu", batch=8):
     return acc / np.maximum(wsum, 1e-6)
 
 
-def detections_from_map(prob, frame_index, cfg: Config, thresh=0.5, roi_mask=None):
+def detections_from_map(prob, frame_index, cfg: Config, thresh=0.5, roi_mask=None,
+                        res=None):
     """Probability map -> Detection objects, using the same streak fitting as
-    the classical path so the two are directly comparable."""
+    the classical path so the two are directly comparable.
+
+    The map saturates (a firebrand is ~1.0 end to end), so it cannot say where
+    one ember stops and the next starts: in a shower the mask is one blob over
+    several embers. `res`, the centre residual, can, and split_cores uses it as
+    it does for the classical detector. Detection.peak stays the model's
+    probability x 255: that is what --min-track-conf and --real-min-conf read.
+    """
     p8 = (np.clip(prob, 0, 1) * 255).astype(np.uint8)
     if roi_mask is not None:
         p8 = cv2.bitwise_and(p8, p8, mask=roi_mask)
@@ -61,31 +69,16 @@ def detections_from_map(prob, frame_index, cfg: Config, thresh=0.5, roi_mask=Non
     bw = cv2.morphologyEx(bw, cv2.MORPH_CLOSE, np.ones((3, 3), np.uint8))
     n, lab, stats, _ = cv2.connectedComponentsWithStats(bw, 8)
 
+    frac = float(getattr(dcfg, "split_frac", 0.0)) if res is not None else 0.0
     out = []
     for i in range(1, n):
-        area = int(stats[i, cv2.CC_STAT_AREA])
-        if not (dcfg.min_area <= area <= dcfg.max_area):
+        if int(stats[i, cv2.CC_STAT_AREA]) < dcfg.min_area:
             continue
         ys, xs = np.where(lab == i)
-        pts = np.stack([xs, ys], 1).astype(np.float32)
-        if len(pts) >= 5:
-            (cx, cy), (w, h), ang = cv2.minAreaRect(pts)
-            L, W = max(w, h), max(min(w, h), 1e-3)
-            theta = np.deg2rad(ang if w >= h else ang + 90.0)
-        else:
-            # Too few pixels for minAreaRect: the bounding box, exactly as the
-            # classical detector does it (a 1x3 blob is vertical, not horizontal).
-            cx, cy = float(xs.mean()), float(ys.mean())
-            bw = float(stats[i, cv2.CC_STAT_WIDTH])
-            bh = float(stats[i, cv2.CC_STAT_HEIGHT])
-            L, W = max(bw, bh), max(min(bw, bh), 1e-3)
-            theta = 0.0 if bw >= bh else np.pi / 2
-        if L < dcfg.min_length or L > dcfg.max_length:
-            continue
-        v = p8[ys, xs].astype(np.float32)
-        out.append(D.Detection(frame=frame_index, x=float(cx), y=float(cy),
-                               L=float(L), W=float(W), theta=float(theta),
-                               peak=float(v.max()), area=area, flux=float(v.sum())))
+        for pys, pxs in D.split_cores(ys, xs, res, frac, dcfg.min_area):
+            d = D.fit_streak(pys, pxs, p8, frame_index, dcfg, shape_gate=False)
+            if d is not None:
+                out.append(d)
     return out
 
 
@@ -102,17 +95,18 @@ def run_clip(model, source, cfg: Config, roi_mask=None, thresh=0.5,
     for k, (i, stack) in enumerate(residual_stacks(source, cfg.detect, roi_mask,
                                                    cfg.train.n_frames_stack)):
         prob = predict_map(model, stack, cfg.train.tile, cfg.train.stride, device)
-        dets[i] = detections_from_map(prob, i, cfg, thresh, roi_mask)
+        dets[i] = detections_from_map(prob, i, cfg, thresh, roi_mask,
+                                      res=stack[stack.shape[0] // 2])
         if progress and k % 25 == 0:
             progress(k)
 
     ratio = T.estimate_step_ratio(dets, cfg.track)
     tracks = T.link(dets, cfg.track, step_ratio=ratio)
-    return dets, T.accept(tracks, cfg.track)
+    return dets, T.accept(tracks, cfg.track, step_ratio=ratio)
 
 
 def sweep_threshold(model, source, cfg, gt_by_frame, roi_mask=None,
-                    thresholds=(0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8), device="cpu"):
+                    thresholds=(0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8), device="cpu"):
     """Pick the operating threshold on held-out data, not by eye.
 
     Cache the probability maps once and re-threshold, rather than re-running the

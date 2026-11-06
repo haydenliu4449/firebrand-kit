@@ -95,7 +95,10 @@ def read_specs(path: Path):
         if not line:
             continue
         parts = line.replace(",", " ").split()
-        name, ranges = Path(parts[0]).stem, []
+        # "clip: 0:00-0:04" is how people write it. The colon used to stay on
+        # the name, so the clip was "not found" and every negative was dropped
+        # (the whole 2026-10-23 train ran without them).
+        name, ranges = Path(parts[0].rstrip(":")).stem, []
         for tok in parts[1:]:
             a, sep, b = tok.partition("-")
             if a.isdigit() and (not sep or b.isdigit()):

@@ -247,37 +247,109 @@ def detect_frame(res, frame_index, cfg: DetectConfig, edge=None):
 
     n, lab, stats, _ = cv2.connectedComponentsWithStats(bw, 8)
     out = []
+    frac = float(getattr(cfg, "split_frac", 0.0))
     for i in range(1, n):
         area = int(stats[i, cv2.CC_STAT_AREA])
-        if not (cfg.min_area <= area <= cfg.max_area):
+        if area < cfg.min_area:
             continue
         ys, xs = np.where(lab == i)
-        pts = np.stack([xs, ys], 1).astype(np.float32)
-
-        if len(pts) >= 5:
-            (cx, cy), (w, h), ang = cv2.minAreaRect(pts)
-            L, W = max(w, h), max(min(w, h), 1e-3)
-            theta = np.deg2rad(ang if w >= h else ang + 90.0)
-        else:
-            cx, cy = float(xs.mean()), float(ys.mean())
-            w = float(stats[i, cv2.CC_STAT_WIDTH])
-            h = float(stats[i, cv2.CC_STAT_HEIGHT])
-            L, W = max(w, h), max(min(w, h), 1e-3)
-            theta = 0.0 if w >= h else np.pi / 2
-
-        if not (cfg.min_length <= L <= cfg.max_length):
-            continue
-        if L / W < cfg.min_elongation:
-            continue
-        if area / max(L * W, 1.0) < cfg.min_solidity:
-            continue
-
-        vals = res[ys, xs].astype(np.float32)
-        out.append(Detection(frame=frame_index, x=float(cx), y=float(cy),
-                             L=float(L), W=float(W), theta=float(theta),
-                             peak=float(vals.max()), area=area,
-                             flux=float(vals.sum())))
+        for pys, pxs in split_cores(ys, xs, res, frac, cfg.min_area):
+            d = fit_streak(pys, pxs, res, frame_index, cfg)
+            if d is not None:
+                out.append(d)
     return out
+
+
+def split_cores(ys, xs, res, frac, min_area):
+    """One thresholded blob -> the pixels of each ember in it.
+
+    The frame-wide threshold is ~12 where bright embers peak at 100-250, so a
+    bright ember's blob is its glow: 15-30 px wide, its centre pulled towards
+    whatever else it touched, and in a shower several embers come out as one
+    box. Measured on clip5: those are the bright embers no track ever keeps,
+    because the linker follows the centre of a box that keeps changing shape.
+
+    So a blob is re-thresholded at `frac` of its OWN peak (the half-maximum
+    outline of the streak, whatever its brightness) and every core found is an
+    ember. What is left once the cores and their glow are taken out is judged
+    again, so a faint streak touching a bright one is not lost. frac=0 turns
+    this off. A blob whose peak is not well above the rest of it is left alone:
+    faint streaks stay as they were.
+    """
+    if frac <= 0 or len(ys) < 2 * min_area:
+        return [(ys, xs)]
+    y0, x0 = int(ys.min()), int(xs.min())
+    h, w = int(ys.max()) - y0 + 1, int(xs.max()) - x0 + 1
+    vals = np.zeros((h, w), np.float32)
+    vals[ys - y0, xs - x0] = res[ys, xs]
+    todo = vals > 0
+    found = []
+    for _round in range(3):
+        if todo.sum() < min_area:
+            break
+        peak = float(vals[todo].max())
+        lo = float(np.percentile(vals[todo], 25))
+        if peak < 2.0 * max(lo, 1.0):              # flat: nothing to separate
+            break
+        core = (todo & (vals >= frac * peak)).astype(np.uint8)
+        k, cl, st, _ = cv2.connectedComponentsWithStats(core, 8)
+        got = [c for c in range(1, k) if st[c, cv2.CC_STAT_AREA] >= min_area]
+        if not got:
+            break
+        for c in got:
+            cy, cx = np.where(cl == c)
+            found.append((cy + y0, cx + x0))
+        # Take out each core with its glow. The glow of a streak is about as
+        # wide as the streak, so the margin follows the core's own thickness.
+        keep = np.isin(cl, got).astype(np.uint8)
+        # Padded: a core that fills its box has no zero pixel, and the distance
+        # transform of that is a huge number, not a thickness.
+        thick = float(cv2.distanceTransform(np.pad(keep, 1), cv2.DIST_L2, 3).max())
+        r = int(np.ceil(2.0 * thick)) + 2
+        halo = cv2.dilate(keep, cv2.getStructuringElement(
+            cv2.MORPH_ELLIPSE, (2 * r + 1, 2 * r + 1)))
+        todo = todo & (halo == 0)
+    if not found:
+        return [(ys, xs)]
+    if todo.sum() >= min_area:                     # faint remainder: its own pieces
+        k, cl, st, _ = cv2.connectedComponentsWithStats(todo.astype(np.uint8), 8)
+        for c in range(1, k):
+            if st[c, cv2.CC_STAT_AREA] >= min_area:
+                cy, cx = np.where(cl == c)
+                found.append((cy + y0, cx + x0))
+    return found
+
+
+def fit_streak(ys, xs, res, frame_index, cfg: DetectConfig, shape_gate=True):
+    """The pixels of one streak -> a Detection, or None if it is not streak-like.
+    shape_gate=False keeps only the size limits (the model's output is judged
+    by the model, not by its elongation)."""
+    area = int(len(ys))
+    if not (cfg.min_area <= area <= cfg.max_area):
+        return None
+    pts = np.stack([xs, ys], 1).astype(np.float32)
+    if len(pts) >= 5:
+        (cx, cy), (w, h), ang = cv2.minAreaRect(pts)
+        L, W = max(w, h), max(min(w, h), 1e-3)
+        theta = np.deg2rad(ang if w >= h else ang + 90.0)
+    else:
+        cx, cy = float(xs.mean()), float(ys.mean())
+        w = float(xs.max() - xs.min() + 1)
+        h = float(ys.max() - ys.min() + 1)
+        L, W = max(w, h), max(min(w, h), 1e-3)
+        theta = 0.0 if w >= h else np.pi / 2
+
+    if not (cfg.min_length <= L <= cfg.max_length):
+        return None
+    if shape_gate:
+        if L / W < cfg.min_elongation:
+            return None
+        if area / max(L * W, 1.0) < cfg.min_solidity:
+            return None
+    vals = res[ys, xs].astype(np.float32)
+    return Detection(frame=frame_index, x=float(cx), y=float(cy), L=float(L), W=float(W),
+                     theta=float(theta), peak=float(vals.max()), area=area,
+                     flux=float(vals.sum()))
 
 
 def detect_source(source, cfg: DetectConfig, roi_mask=None, progress=None):

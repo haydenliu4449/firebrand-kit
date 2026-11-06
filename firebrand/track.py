@@ -354,7 +354,37 @@ def _physical(t: Track, cfg: TrackConfig) -> bool:
     return True
 
 
-def accept(tracks: list[Track], cfg: TrackConfig) -> list[Track]:
+def pair_ok(t: Track, cfg: TrackConfig, step_ratio: float) -> bool:
+    """Is a 2-detection track one ember, judged on geometry alone?
+
+    Three frames of coherence are the usual proof. Two detections have none,
+    but a streak is itself a measurement: it says which way the ember was going
+    (mod pi) and, through step_ratio, how far it should go by the next frame.
+    A chance pairing of neighbours has to match on both streaks' directions and
+    on the distance. Round blobs carry no direction and never pass.
+    """
+    a, b = t.dets
+    gap = b.frame - a.frame
+    if gap != 1:
+        return False
+    for d in (a, b):
+        if d.L / max(d.W, 1e-3) < cfg.pair_min_elongation:
+            return False
+    dx, dy = b.x - a.x, b.y - a.y
+    step = float(np.hypot(dx, dy))
+    want = step_ratio * (a.L + b.L) / 2.0
+    if step <= 0 or want <= 0 or not (want / cfg.pair_step_tol <= step <= want * cfg.pair_step_tol):
+        return False
+    h = np.arctan2(dy, dx)
+    for d in (a, b):
+        off = abs(np.angle(np.exp(1j * (h - d.theta))))
+        if np.rad2deg(min(off, np.pi - off)) > cfg.pair_max_angle_deg:
+            return False
+    lo, hi = sorted((a.peak, b.peak))
+    return lo > 0 and hi / lo <= cfg.max_brightness_jump
+
+
+def accept(tracks: list[Track], cfg: TrackConfig, step_ratio: float | None = None) -> list[Track]:
     """Keep only tracks that behave like a physical particle.
 
     Each rule kills a specific failure:
@@ -367,7 +397,13 @@ def accept(tracks: list[Track], cfg: TrackConfig) -> list[Track]:
     brightness-jump rule at one link is cut there first, and each piece is
     judged on its own -- one bad association no longer discards a real ember.
     """
-    return [t for t in pieces(tracks, cfg) if _physical(t, cfg)]
+    keep = []
+    for t in pieces(tracks, cfg):
+        if _physical(t, cfg):
+            keep.append(t)
+        elif cfg.accept_pairs and step_ratio and len(t.dets) == 2 and pair_ok(t, cfg, step_ratio):
+            keep.append(t)
+    return keep
 
 
 def rejected(tracks: list[Track], accepted: list[Track], cfg: TrackConfig | None = None) -> list[Track]:

@@ -128,6 +128,11 @@ class DetectConfig:
     blobs and compression artifacts do not. Median real streak on this camera
     is 7 px long at ~3:1."""
 
+    split_frac: float = 0.5
+    """Each blob is re-thresholded at this fraction of its own peak, so a bright
+    ember is measured by its half-maximum outline rather than by its glow, and
+    embers merged into one blob come apart (detect.split_cores). 0 = off."""
+
     min_solidity: float = 0.30
     """component area / (L * W). Rejects wispy edge fragments."""
 
@@ -206,6 +211,21 @@ class TrackConfig:
     accepted tracks) are exactly the ones a person sees missing in an overlay.
     The heading limit caught mostly smooth fast tracks with a single 27-31
     degree bend. Set False for the original whole-track behaviour."""
+
+    accept_pairs: bool = False
+    """Also accept a 2-detection track when the streak geometry confirms the
+    link (track.pair_ok). Off for the classical detector, whose tracks are
+    training labels; on when tagging, where the model has already judged each
+    detection's appearance and a fast ember is often in view for 2 frames."""
+
+    pair_min_elongation: float = 1.8
+    """A streak shorter than this L/W has no usable direction: no pair."""
+
+    pair_max_angle_deg: float = 20.0
+    """The step must run along both streaks, within this."""
+
+    pair_step_tol: float = 1.6
+    """...and be step_ratio x streak length, within this factor."""
 
     max_speed_cv: float = 0.8
     """Coefficient of variation of inter-frame step length. Catches

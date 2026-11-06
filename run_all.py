@@ -58,7 +58,7 @@ import pandas as pd
 from firebrand import Config, frames as F, detect as D, track as T, review as R
 from firebrand.config import SynthConfig
 from firebrand import synth as S, dataset as DS, evaluate as E, gcsio
-from firebrand import negatives as NG, reallabels as RL
+from firebrand import negatives as NG, reallabels as RL, resting as RS
 
 VIDEO_EXTS = {".mp4", ".avi", ".mov", ".mkv", ".m4v"}
 
@@ -380,6 +380,13 @@ def negative_runs(args, work):
     if not specs:
         return []
     runs = NG.plan(NG.resolve(specs, neg_clip_paths(args), log=log))
+    if not runs:
+        # Stop here rather than spend an hour training without them: without
+        # negatives the eval stage also cannot count false tracks on empty
+        # footage, so the operating threshold is picked blind.
+        raise SystemExit(f"negatives.txt lists {', '.join(sorted(specs))} but no usable "
+                         f"footage came of it -- check the names against clips/ and "
+                         f"negclips/ (see the lines above)")
     NG.describe(runs, log=log)
     return runs
 
@@ -838,7 +845,8 @@ def stage_eval(args, cfg):
                                                    c.detect, edge)
                     prob = I.predict_map(model, stack, cfg.train.tile, cfg.train.stride, dev)
                     for th in ths:
-                        mine[th][fi] = I.detections_from_map(prob, fi, c, th, nroi)
+                        mine[th][fi] = I.detections_from_map(
+                            prob, fi, c, th, nroi, res=stack[stack.shape[0] // 2])
                 moving = NG.moving_tracks(classical, c.track)
                 if moving:
                     n_dropped += 1
@@ -860,9 +868,11 @@ def stage_eval(args, cfg):
             n_tr = 0
             for key, by in dets[th].items():
                 c = seg_cfg[key]
-                n_tr += len(T.accept(T.link(by, c.track,
-                                            step_ratio=T.estimate_step_ratio(by, c.track)),
-                                     c.track))
+                # Judged exactly as tag will judge them, pairs included.
+                c.track.accept_pairs = not args.no_pairs
+                ratio = T.estimate_step_ratio(by, c.track)
+                n_tr += len(T.accept(T.link(by, c.track, step_ratio=ratio), c.track,
+                                     step_ratio=ratio))
             rates[th] = 100.0 * n_tr / max(n_used, 1)
         for r in sweep:
             r["false_tracks_per_100_empty_frames"] = rates[r["threshold"]]
@@ -872,12 +882,22 @@ def stage_eval(args, cfg):
         for r in sweep:
             log(f"    threshold {r['threshold']:.1f}   F1 {r['f1']:.3f}   "
                 f"false tracks {rates[r['threshold']]:.2f}")
+        # The LOWEST threshold that stays quiet on empty footage, not the best F1.
+        # The sweep paints embers on frames full of real, unlabelled embers, so
+        # every real ember the model finds there counts as a false positive: F1
+        # rises with the threshold for that reason alone, and always picked the
+        # top of the range (0.8). Empty footage is the only clean measure of
+        # false alarms, so it sets the limit, and recall gets everything under it.
         ok = [r for r in sweep if rates[r["threshold"]] <= args.max_empty_fp]
-        best = max(ok, key=lambda r: r["f1"]) if ok else \
+        best = min(ok, key=lambda r: r["threshold"]) if ok else \
             min(sweep, key=lambda r: (rates[r["threshold"]], -r["f1"]))
         if best is not best_f1:
-            log(f"  -> using threshold {best['threshold']} instead: the best-F1 one "
-                f"invents {rates[best_f1['threshold']]:.2f} tracks per 100 empty frames")
+            log(f"  -> using threshold {best['threshold']}: the lowest within "
+                f"{args.max_empty_fp} false tracks per 100 empty frames")
+    if empty is None:
+        log("  !! no firebrand-free footage to judge by: the threshold below is the")
+        log("     best F1 on a sweep that counts real embers as false positives, so")
+        log("     it is too high. Fix negatives.txt, or pass --threshold to tag.")
     log(f"  operating threshold {best['threshold']} (F1 {best['f1']:.3f})")
 
     with Timer("  learned model"):
@@ -915,6 +935,27 @@ def stage_eval(args, cfg):
 # ---------------------------------------------------------------------------
 # stage: tag -- the point of the whole exercise
 # ---------------------------------------------------------------------------
+
+def scene_reference(args, work):
+    """The scene with no embers on it, built once from every clip and kept in
+    work/. Tag tasks run in parallel: the loser of a race just overwrites the
+    same picture, and the rename means nobody reads half a file."""
+    path = work / "scene_ref.png"
+    if path.exists():
+        return cv2.imread(str(path), cv2.IMREAD_GRAYSCALE)
+    clips = list_clips(args.clips)
+    first = next(iter(F.VideoSource(clips[0])), None)
+    if first is None:
+        return None
+    ks = max(5, int(round(RS.RestConfig().tophat_ksize * first.shape[1] / 3840 / 2)) * 2 + 1)
+    with Timer(f"  scene reference from {len(clips)} clip(s)"):
+        scene = RS.scene_reference(clips, ks)
+    if scene is not None:
+        tmp = path.with_name(f"scene_ref.{os.getpid()}.png")
+        cv2.imwrite(str(tmp), scene)
+        os.replace(tmp, path)
+    return scene
+
 
 def stage_tag(args, cfg):
     """Run the trained model over every real clip and write the firebrands it
@@ -1000,6 +1041,7 @@ def stage_tag(args, cfg):
         elif F.is_ir(first):
             c.detect.channel = "gray"
         c.train = tcfg
+        c.track.accept_pairs = not args.no_pairs
         roi = roi_for(args, first)
 
         with Timer(f"  {name}: tagging {n_frames} frames at threshold {thresh}"):
@@ -1038,6 +1080,17 @@ def stage_tag(args, cfg):
                     for cl, *v in boxes:
                         fh.write(f"{cl} " + " ".join(f"{x:.6f}" for x in v) + "\n")
 
+        # Embers lying still: the residual (so the model) cannot see them.
+        rest = []
+        if not args.no_resting:
+            scene = scene_reference(args, work)
+            if scene is not None and scene.shape == (H, W):
+                with Timer(f"  {name}: resting embers"):
+                    rest = RS.run_clip(stream(), scene, roi, scale=W / 3840.0)
+            pd.DataFrame(rest, columns=["ember_id", "x", "y", "frame_start", "frame_end",
+                                        "looks", "peak", "area"]) \
+                .to_csv(out / "resting.csv", index=False)
+
         if args.overlay:
             by, cby = {}, {}
             for tr in acc:
@@ -1049,7 +1102,11 @@ def stage_tag(args, cfg):
                                  cv2.VideoWriter_fourcc(*"mp4v"), c.track.fps, (W, H))
             for i, f in enumerate(stream()):
                 f = D.draw(f, cby.get(i, []), color=(0, 220, 255), thickness=1)   # yellow
-                vw.write(D.draw(f, by.get(i, [])))                                # green
+                f = D.draw(f, by.get(i, []))                                      # green
+                for e in rest:                                                    # cyan
+                    if e["frame_start"] <= i <= e["frame_end"]:
+                        cv2.circle(f, (int(e["x"]), int(e["y"])), 12, (255, 255, 0), 2)
+                vw.write(f)
             vw.release()
 
         classical = None
@@ -1058,12 +1115,13 @@ def stage_tag(args, cfg):
             classical = json.load(open(det_done)).get("n_accepted")
         n_det = sum(len(v) for v in dets.values())
         log(f"  {name}: {n_det} model detections -> {len(acc)} accepted tracks, "
-            f"{len(cand)} detections not in any accepted track"
+            f"{len(cand)} detections not in any accepted track, {len(rest)} resting embers"
             + (f" (classical detector: {classical})" if classical is not None else ""))
         with open(flag, "w") as fh:
             json.dump({"clip": clip, "n_frames": n_frames, "shape": [H, W],
                        "threshold": thresh, "n_detections": n_det,
-                       "n_tracks": len(acc), "classical_n_accepted": classical,
+                       "n_tracks": len(acc), "n_resting": len(rest),
+                       "classical_n_accepted": classical,
                        "model": str(ck)}, fh, indent=2)
 
     log("tag stage complete", rule=True)
@@ -1171,6 +1229,11 @@ def main(argv=None):
     ap.add_argument("--min-track-conf", type=float, default=0.0,
                     help="tag: keep a track only if the model's probability "
                          "reaches this on at least one of its detections (0 = off)")
+    ap.add_argument("--no-pairs", action="store_true",
+                    help="tag/eval: only tracks of 3+ frames, not 2-frame ones the "
+                         "streak geometry confirms")
+    ap.add_argument("--no-resting", action="store_true",
+                    help="tag: skip the pass that finds embers lying still (resting.csv)")
     ap.add_argument("--set", action="append", default=[], metavar="SECTION.KEY=VALUE",
                     help="override any setting in firebrand/config.py, e.g. "
                          "--set track.max_heading_change_deg=40 (repeatable)")

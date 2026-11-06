@@ -38,6 +38,10 @@ def test_read_specs():
                      "quiet.mp4 0:00-6:40, 9:15-22:30   # times\nclip8\n")
         s = NG.read_specs(p)
     assert s["clip3"] == [("f", 0, 150)]
+    with tempfile.TemporaryDirectory() as d:
+        p = Path(d) / "negatives.txt"
+        p.write_text("D01_20250107230423: 0:00-0:04, 0:19-0:26\n")
+        assert list(NG.read_specs(p)) == ["D01_20250107230423"]   # colon is not the name
     assert s["clip5"] == [("f", 400, 520), ("f", 900, 1010)]
     assert s["quiet"] == [("t", 0.0, 400.0), ("t", 555.0, 1350.0)]
     assert s["clip8"] == [None]
