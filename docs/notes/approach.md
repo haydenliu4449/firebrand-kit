@@ -273,9 +273,27 @@ window of the top band (y 0-768), clip5 frames 80-119 and clip9 140-179:
   In that area: ember-clip tracks 3142 -> 3559 (443 reopened, 26 closed); tracks on
   empty video 137 -> 20 (7 of them in the reopened part, 240 frames). Classical
   tracks, not the model's; the eval stage's empty-footage count is the check on it.
-- Not verified: real recall. Counts above are tracks, not firebrands confirmed.
-  Next: rebuild, tag, then `evaluate_tags.py --heldout`. Detect also picks up
-  `split_frac` if rerun, which would change the classical labels.
+- **Measured on Batch, 2026-11-06** (job fb-tag-20261106-075357, 10-23 model, mask
+  v2, threshold 0.8, 2.34 h). 91,049 tracks and 1,837 resting embers, against 1,339
+  tracks from the old tags and 44,515 classical. `evaluate_tags.py --heldout` recall
+  vs verified tracks: **0.005 -> 0.443** at 5 px, 0.008 -> 0.634 at 15 px. Core
+  splitting moves centres, so 5 px understates it.
+- **Part of the verified set is leaves.** 72% of clip11's and 45% of clip8's verified
+  detections lie in y<80, x 250-1100: sunlit canopy above the mask's top edge
+  (seen on a crop), 5,857 tracks over the 10 clips. Leaving out tracks mostly in that
+  strip: recall 0.509 at 5 px, 0.727 at 15 px; clip11 0.17 -> 0.62. Those tracks
+  are also --real-positives labels, so they should go before the next train.
+- Verified held-out detections, within max(15 px, L/2 + 5): 61% tagged, 14% seen and
+  dropped by the tracker, 25% never seen (faint: median peak ~15 vs ~50, L ~5 vs ~12).
+- Model-only tracks: 22,066 held out. Sheets from clip5 (2 of 36 looked at) show
+  real embers, no texture, but some long tracks change streak angle between crops,
+  i.e. hop (finding 5). Precision on quiet footage still unmeasured: the eval stage's
+  empty-footage count needs the next train.
+- Tag cost: `np.where(lab == i)` scanned the whole frame per blob. 1579 s -> 471 s
+  on clip10 with `blob_pixels`, output identical.
+- evaluate_tags --heldout had two bugs, both fixed: it crashed on a clip with no
+  tags (df[[]] selects columns), and it read only the first `count` frames, which
+  left sheets blank.
 
 ## Pipeline (as implemented in firebrand-kit)
 

@@ -158,6 +158,7 @@ def evaluate_clip(work: Path, name: str, args):
     tag_dir, det_dir, out = work / "tags" / name, work / "clips" / name, work / "eval" / name
     counts = [x for x in (n_frames(tag_dir / "done.json"), n_frames(det_dir / "done.json")) if x]
     n = min(counts) if counts else 10 ** 9
+    n_video = n                   # frames to read; --heldout turns n into a count
 
     model = read_dets(tag_dir / "detections.csv")
     classical = read_dets(det_dir / "detections.csv")
@@ -165,8 +166,11 @@ def evaluate_clip(work: Path, name: str, args):
     classical = classical[classical.frame < n].reset_index(drop=True)
     if args.heldout:
         # Only the held-out blocks: frames that --real-positives never trains on.
-        model = model[[is_heldout(name, f) for f in model.frame]].reset_index(drop=True)
-        classical = classical[[is_heldout(name, f) for f in classical.frame]] \
+        # A boolean array, not a list: on an empty table df[[]] selects no COLUMNS,
+        # and the next groupby("frame") crashes (clip9 once had no tags at all).
+        model = model[np.array([is_heldout(name, f) for f in model.frame], bool)] \
+            .reset_index(drop=True)
+        classical = classical[np.array([is_heldout(name, f) for f in classical.frame], bool)] \
             .reset_index(drop=True)
         last = n if n < 10 ** 9 else int(max(model.frame.max() if len(model) else 0,
                                               classical.frame.max() if len(classical) else 0)) + 1
@@ -220,7 +224,7 @@ def evaluate_clip(work: Path, name: str, args):
     # physics check, free: ballistic residual of the model's tracks
     ball = read_csv_or_empty(tag_dir / "tracks.csv")
     if len(ball) and "frame_start" in ball:
-        ball = ball[ball.frame_start < n]
+        ball = ball[ball.frame_start < n_video]
     res = ball["ballistic_rms_px"].to_numpy() if len(ball) and "ballistic_rms_px" in ball \
         else np.array([])
 
@@ -251,7 +255,7 @@ def evaluate_clip(work: Path, name: str, args):
 
     def window():
         for i, f in enumerate(src):
-            if i >= n:
+            if i >= n_video:
                 return
             yield f
 
