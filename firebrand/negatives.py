@@ -361,11 +361,28 @@ def hard_tiles(dets, stack, roi, tile, k, rng):
     return out
 
 
+MOVING_MIN_DETS = 6        # frames a track must last to count as evidence
+MOVING_MIN_TRAVEL = 30.0   # px at 1920 wide, start to end
+
+
 def moving_tracks(dets_by_frame, tcfg: TrackConfig):
-    """What the classical detector would accept as firebrand tracks here."""
+    """Tracks that are real evidence of an ember in footage you called empty.
+
+    Not every accepted track: this used to be, and in the wind it threw out 13
+    of 15 stretches of D01, for lit foliage, hedge leaves and a speck on the lawn
+    with a step of 0 px, all of them 3-5 frames. You watched this footage; the
+    check is a backstop against an ember you missed, and an ember crosses the
+    scene. So a track must last and must get somewhere.
+    """
     if not any(dets_by_frame.values()):
         return []
-    return T.accept(T.link(dets_by_frame, tcfg, step_ratio=T.resolve_step_ratio(tcfg)), tcfg)
+    scale = tcfg.max_step_px / TrackConfig().max_step_px     # 1920-wide px -> this clip
+    out = []
+    for t in T.accept(T.link(dets_by_frame, tcfg, step_ratio=T.resolve_step_ratio(tcfg)), tcfg):
+        travel = float(np.hypot(t.dets[-1].x - t.dets[0].x, t.dets[-1].y - t.dets[0].y))
+        if len(t.dets) >= MOVING_MIN_DETS and travel >= MOVING_MIN_TRAVEL * scale:
+            out.append(t)
+    return out
 
 
 def describe_tracks(tracks, run, limit=3):

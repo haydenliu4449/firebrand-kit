@@ -291,6 +291,15 @@ window of the top band (y 0-768), clip5 frames 80-119 and clip9 140-179:
   re-run. Outside v3: 18,803 of 177,260 verified detections (clip11 70%, clip8 44%),
   3,857 of 544,587 model ones. evaluate_tags still scores against all verified
   tracks, leaves included: compare like with like (work/mask_review/nocanopy.py).
+- **The firebrand-free check was too strict.** First real use of D01 (train job
+  fb-train-20261106-190123): 13 of 15 runs dropped, 55 frames left, because one
+  accepted track dropped a run. Looked at one (frames 32-63): lit foliage swaying
+  top right (x 3300-3900, y < 200), hedge leaves, a lawn speck with step 0. No
+  embers. `moving_tracks` now needs >= 6 detections and >= 30 px (at 1920 wide) of
+  travel. Same blocks locally: 13 of 13 empty pass with 0 tracks; clip5, clip9 and
+  clip10 blocks still flagged, 206 / 33 / 575 tracks. In the same log the 10-23 model
+  fired on 13 of 14 empty frames at the mining threshold 0.3: its false-alarm
+  rate is unmeasured, not known to be low.
 - Model-only tracks: 22,066 held out. Sheets from clip5 (2 of 36 looked at) show
   real embers, no texture, but some long tracks change streak angle between crops,
   i.e. hop (finding 5). Precision on quiet footage still unmeasured: the eval stage's

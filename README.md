@@ -507,9 +507,10 @@ With that file, the train step:
   that invents at most 1 per 100 frames (`--max-empty-fp`). Before 2026-10-22
   that count was made on frames the model had trained on, which flatters it.
 - **checks every block first.** The classical detector runs on each block. If
-  anything in it forms a track, the block is not used and the log says where:
+  a track lasts 6+ frames and really travels (30 px at 1920 wide), the block is
+  not used and the log says where:
   `!! quiet_30min 12:31.2-12:32.5 (frames ...): something moves like an ember --
-  12:31.4 at x=1204 y=880 (5 frames)`. Look at those times. If it is a
+  12:31.4 at x=1204 y=880 (7 frames)`. Look at those times. If it is a
   firebrand, take that stretch out of `negatives.txt`. If more than half the
   blocks are dropped, something else in the scene moves (leaves, a flag, a
   light).

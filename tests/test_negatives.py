@@ -80,6 +80,23 @@ def test_scarce_uses_whole_blocks():
     assert sum(r.n for r in cand) == sum(r.n for r in runs if r.role == "train")
 
 
+def test_moving_tracks_wants_real_evidence():
+    from firebrand.config import TrackConfig
+    from firebrand.detect import Detection
+
+    def det(f, x, y):
+        return Detection(frame=f, x=x, y=y, L=20.0, W=3.0, theta=0.0, peak=80.0,
+                         area=40, flux=900.0)
+
+    cfg = TrackConfig(step_ratio=1.0)
+    flying = {f: [det(f, 100.0 + 20 * f, 50.0)] for f in range(8)}
+    assert len(NG.moving_tracks(flying, cfg)) == 1, "an ember crossing the scene got through"
+    short = {f: [det(f, 100.0 + 20 * f, 50.0)] for f in range(4)}
+    assert NG.moving_tracks(short, cfg) == [], "a 4-frame track dropped a stretch"
+    still = {f: [det(f, 100.0, 50.0)] for f in range(10)}
+    assert NG.moving_tracks(still, cfg) == [], "a flickering speck dropped a stretch"
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):
