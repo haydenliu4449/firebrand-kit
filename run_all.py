@@ -700,8 +700,11 @@ def stage_tiles(args, cfg):
             f"they contain real, unlabelled embers)")
 
     with Timer(f"  rendering {args.synth_frames} synthetic frames"):
+        # Masks stay uint8 from here to the file: float32 is 4x the memory, and
+        # with firebrand-free tiles on top that no longer fits the VM.
         X, Y, _sf, _sg = DS.build_from_synthetic(bg_list, args.synth_frames, cfg,
-                                                 seed=0, roi_mask=roi)
+                                                 seed=0, roi_mask=roi, masks_u8=True)
+    del _sf, _sg
     log(f"  synthetic: {DS.tile_stats(X, Y)}")
 
     # Real firebrands (--real-positives): tiles from your clips around verified
@@ -712,8 +715,12 @@ def stage_tiles(args, cfg):
             n_total = len(X) / max(1e-6, 1 - args.neg_frac - args.real_frac)
             n_real = min(len(Xr), int(round(n_total * args.real_frac)))
             pick = rng_pick(len(Xr), n_real, 5)
-            X = np.concatenate([X, Xr[pick]])
-            Y = np.concatenate([Y, Yr[pick].astype(Y.dtype)])
+            parts = [X, Xr[pick]]
+            X = None
+            X = DS.concat_free(parts)
+            parts = [Y, DS.to_mask8(Yr[pick])]     # Yr is float 0..1: not astype
+            Y = None
+            Y = DS.concat_free(parts)
             log(f"  real firebrands: {n_real} tiles of {len(Xr)} available "
                 f"({n_real / len(X):.0%} of the tiles so far)")
         del Xr, Yr
@@ -733,8 +740,12 @@ def stage_tiles(args, cfg):
         Xn = np.concatenate([hard[pick_h], rand[pick_r]]) if n_hard + n_rand else None
         del rand, hard, neg_rand, neg_hard
         if Xn is not None and len(Xn):
-            X = np.concatenate([X, Xn])
-            Y = np.concatenate([Y, np.zeros((len(Xn),) + Y.shape[1:], Y.dtype)])
+            parts = [X, Xn]
+            X = None
+            X = DS.concat_free(parts)
+            parts = [Y, np.zeros((len(Xn),) + Y.shape[1:], Y.dtype)]
+            Y = None
+            Y = DS.concat_free(parts)
             log(f"  real negatives: {len(Xn)} tiles ({n_hard} hard, {n_rand} random) from "
                 f"{used_frames} firebrand-free frames ({len(Xn) / len(X):.0%} of all tiles)")
         else:

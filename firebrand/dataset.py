@@ -130,8 +130,37 @@ def _as_runs(background):
     return None
 
 
+def to_mask8(y, block=512):
+    """Float masks in 0..1 -> uint8 0..255, the form they are saved in. Already
+    uint8: returned as is. Done in blocks so `y * 255` never makes a full-size
+    float copy. Note that `y.astype(np.uint8)` is NOT this: it truncates a 0..1
+    mask to all zeros."""
+    if y.dtype == np.uint8:
+        return y
+    out = np.empty(y.shape, np.uint8)
+    for i in range(0, len(y), block):
+        out[i:i + block] = (y[i:i + block] * 255).astype(np.uint8)
+    return out
+
+
+def concat_free(parts):
+    """np.concatenate that empties `parts` as it goes, so the peak is the result
+    plus one part rather than twice the result. Measured the hard way: 11,301
+    tiles concatenated beside a firebrand-free set and a CUDA context got the
+    process killed on a 15.6 GB VM (exit -9, no traceback)."""
+    n = sum(len(p) for p in parts)
+    out = np.empty((n,) + parts[0].shape[1:], parts[0].dtype)
+    i = 0
+    while parts:
+        p = parts.pop(0)
+        out[i:i + len(p)] = p
+        i += len(p)
+        del p
+    return out
+
+
 def build_from_synthetic(background, n_frames, cfg, seed=0, max_tiles=None,
-                         roi_mask=None, chunk=40, progress=True):
+                         roi_mask=None, chunk=40, progress=True, masks_u8=False):
     """Render synthetic clips and tile them, in bounded memory.
 
     `background` is one frame, one list of consecutive frames, or a list of
@@ -156,6 +185,8 @@ def build_from_synthetic(background, n_frames, cfg, seed=0, max_tiles=None,
 
     Returns (X, Y, sample_frames, sample_gt) -- the samples are from the FIRST
     chunk only, for eyeballing; the full clip is never held in memory.
+
+    masks_u8=True returns Y as uint8 (see to_mask8), a quarter of the memory.
     """
     from .frames import ArraySource
 
@@ -196,7 +227,7 @@ def build_from_synthetic(background, n_frames, cfg, seed=0, max_tiles=None,
                            max_tiles=None if max_tiles is None
                            else max(max_tiles - total_tiles, 0))
         if len(x):
-            Xs.append(x); Ys.append(y)
+            Xs.append(x); Ys.append(to_mask8(y) if masks_u8 else y)
             total_tiles += len(x)
 
         if sample_frames is None:
@@ -214,16 +245,16 @@ def build_from_synthetic(background, n_frames, cfg, seed=0, max_tiles=None,
     if not Xs:
         empty_x = np.zeros((0, cfg.train.n_frames_stack, cfg.train.tile,
                             cfg.train.tile), np.uint8)
-        return empty_x, np.zeros((0, cfg.train.tile, cfg.train.tile), np.float32), \
+        return empty_x, np.zeros((0, cfg.train.tile, cfg.train.tile),
+                                 np.uint8 if masks_u8 else np.float32), \
             sample_frames or [], sample_gt or []
 
-    return (np.concatenate(Xs), np.concatenate(Ys),
-            sample_frames, sample_gt)
+    return concat_free(Xs), concat_free(Ys), sample_frames, sample_gt
 
 
 def save_tiles(path, X, Y):
     Path(path).parent.mkdir(parents=True, exist_ok=True)
-    np.savez_compressed(path, X=X, Y=(Y * 255).astype(np.uint8))
+    np.savez_compressed(path, X=X, Y=to_mask8(Y))
 
 
 def load_tiles(path, as_float=True):
@@ -275,7 +306,10 @@ def tile_stats(X, Y):
     return dict(n_tiles=len(X), tile=X.shape[-1], channels=X.shape[1],
                 positive_pixel_frac=pos,
                 tiles_with_signal=float((Y.reshape(len(Y), -1).max(1) > t).mean()),
-                residual_mean=float(X.mean()), residual_p99=float(np.percentile(X, 99)))
+                residual_mean=float(X.mean()),
+                # On a sample: np.percentile flattens a full copy of its input,
+                # gigabytes here, for one number in a log line.
+                residual_p99=float(np.percentile(X[::max(1, len(X) // 2000)], 99)))
 
 
 # ---------------------------------------------------------------------------

@@ -300,6 +300,14 @@ window of the top band (y 0-768), clip5 frames 80-119 and clip9 140-179:
   clip10 blocks still flagged, 206 / 33 / 575 tracks. In the same log the 10-23 model
   fired on 13 of 14 empty frames at the mining threshold 0.3: its false-alarm
   rate is unmeasured, not known to be low.
+- **Tiles ran out of memory once negatives worked.** fb-train-20261106-203308: 428
+  negative frames, 0 of 15 runs dropped, then exit -9 just after `synth 300/300`,
+  in the join. Masks were float32 until saved, and every join doubled them. Array
+  flow replayed at quarter scale for ~19k tiles: peak 16.3 GB on a 15.6 GB VM. Masks
+  now stay uint8 from each chunk to the file and `dataset.concat_free` frees as it
+  joins: 8.5 GB, before torch and workers (not measured). Saved tiles byte-identical
+  (tests/test_tiles.py). Real masks are float 0..1, so `.astype(Y.dtype)` would have
+  zeroed them against uint8 Y: use `to_mask8`.
 - Model-only tracks: 22,066 held out. Sheets from clip5 (2 of 36 looked at) show
   real embers, no texture, but some long tracks change streak angle between crops,
   i.e. hop (finding 5). Precision on quiet footage still unmeasured: the eval stage's

@@ -45,7 +45,7 @@ detection, tracking, negatives or training.
 ## Commands
 | what | command |
 |---|---|
-| unit tests (seconds, no torch) | `python3 tests/test_negatives.py && python3 tests/test_reallabels.py && python3 tests/test_detect.py && python3 tests/test_resting.py` |
+| unit tests (seconds, no torch) | `python3 tests/test_negatives.py && python3 tests/test_reallabels.py && python3 tests/test_detect.py && python3 tests/test_resting.py && python3 tests/test_tiles.py` |
 | tracker benchmark (~10 s) | `python3 tests/benchmark.py` (`--ablate` for ablations) |
 | submit a step | `bash scripts/04-submit_job.sh <smoke\|detect\|tiles\|train\|tag> [-- run_all.py args]` |
 | job state / logs | `bash scripts/06-jobs.sh [list\|running\|status JOB\|logs JOB\|log JOB N]` |
@@ -90,6 +90,9 @@ modules: `pip3 install --user opencv-python-headless scipy pandas`.
   track's frames with its boxes).
 - Pixel limits scale with width/1920 (`run_all.px_scale`); never hard-code
   pixel sizes for 4K.
+- Exit code -9 in a job log means killed for memory (15.6 GB VM), with no
+  traceback. Tile masks are uint8 in the tiles stage: use `dataset.to_mask8`, never
+  `.astype`, which zeroes a 0..1 mask.
 - Real-firebrand training removes unlabelled embers from the labelled frame
   per pixel, not per blob (bright glows merge in dense showers). Keep it so.
 - Say what was verified and how. This machine can't run torch, so model-side
@@ -111,9 +114,10 @@ modules: `pip3 install --user opencv-python-headless scipy pandas`.
 - Tagged 2026-11-06 with the 10-23 model and mask `left_front_v2.json`: held-out
   recall 0.005 → 0.443 (0.509 without canopy tracks; finding 9). Old tags kept in
   `work/tags_before_20261023`. Labels outside the mask are now dropped, and `MASK`
-  is `left_front_v3.json`. The firebrand-free check was too strict (finding 9);
-  fix committed. Next: user pushes → rebuild → `train -- --force
-  --real-positives` (first train with real negatives) → tag → compare.
+  is `left_front_v3.json`. Train with negatives ran out of memory in tiles
+  (finding 9); fix committed. Next: user pushes → rebuild → `train -- --force
+  --real-positives` (first train with real negatives) → tag → compare. L4 VMs
+  were scarce on 2026-11-06: a job sat queued 2.6 h; queueing is free, so wait.
 - Negatives: 30-min firebrand-free video `D01_20250107230423` in `negclips/`
   (3 stretches, ~26 s) in `work/negatives.txt`.
 - Open: `--real-positives` retrain not reported; track identity in dense showers
