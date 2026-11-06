@@ -86,6 +86,32 @@ def test_stale_review_ignored():
         assert RL.review_is_current(d, "c1")
 
 
+def test_labels_outside_the_mask_are_dropped():
+    with tempfile.TemporaryDirectory() as d:
+        t = Path(d) / "tags" / "c1"
+        t.mkdir(parents=True)
+        (t / "detections.csv").write_text(
+            "frame,x,y,L,W,theta,peak,area,flux,track_id\n"
+            "5,50,10,10,2,0,250,20,900,1\n"       # in the closed strip
+            "5,50,90,10,2,0,250,20,900,2\n")      # in the open area
+        roi = np.full((120, 200), 255, np.uint8)
+        roi[:40] = 0
+        lab, st = RL.clip_labels(d, "c1", roi=roi)
+        assert len(lab[5]) == 1 and lab[5][0][1] == 90, lab
+        assert st["outside_mask"] == 1, st
+        lab, st = RL.clip_labels(d, "c1")          # no mask: both stay
+        assert len(lab[5]) == 2 and st["outside_mask"] == 0, st
+
+
+def test_in_roi():
+    assert RL.in_roi(None, 5, 5)
+    roi = np.zeros((10, 10), np.uint8)
+    roi[5:] = 255
+    assert RL.in_roi(roi, 3, 7) and not RL.in_roi(roi, 3, 2)
+    assert RL.in_roi(roi, 500, 900)                # past the edge: clamped
+    assert not RL.in_roi(roi, -4, -4)
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):

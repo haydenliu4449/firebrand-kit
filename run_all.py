@@ -441,14 +441,15 @@ def rng_pick(n, k, seed):
 def harvest_real(args, cfg, work, setup):
     """Tiles around real firebrands: verified classical tracks + the model's
     confident, unrejected tags, from the training blocks of every clip."""
-    total = dict(classical=0, model=0, both=0, too_wide=0)
+    total = dict(classical=0, model=0, both=0, too_wide=0, outside_mask=0)
     lab_by, runs = {}, []
     for clip in list_clips(args.clips):
         name = Path(clip).stem
         src = F.VideoSource(clip)
         H, W = src.shape
         labels, st = RL.clip_labels(work, name, args.real_min_conf,
-                                    max_w=6.0 * px_scale(W), dedupe_px=5.0 * px_scale(W))
+                                    max_w=6.0 * px_scale(W), dedupe_px=5.0 * px_scale(W),
+                                    roi=roi_for(args, np.zeros((H, W, 3), np.uint8)))
         if not labels:
             continue
         for k in total:
@@ -465,7 +466,8 @@ def harvest_real(args, cfg, work, setup):
     n_rev = sum(RL.review_is_current(work, n) for n in lab_by)
     log(f"  real firebrands: {total['model']} tagged detections (confident, not rejected) "
         f"+ {total['classical']} verified classical ones the model did not also tag, "
-        f"in {len(lab_by)} clip(s); {total['too_wide']} too wide to be one streak left out")
+        f"in {len(lab_by)} clip(s); {total['too_wide']} too wide to be one streak and "
+        f"{total['outside_mask']} outside the mask left out")
     if n_tag and n_rev < n_tag:
         log(f"  !! {n_tag - n_rev} tagged clip(s) have no work/tags/<clip>/reject.txt: the "
             f"model's own mistakes there are trained on as firebrands. Review the "
@@ -539,12 +541,22 @@ def stage_tiles(args, cfg):
             blob = pickle.load(fh)
         rej_ids = read_rejects(d)
         n_rejected_manual += len(rej_ids)
-        keep = [t for t in blob["accepted"] if t.id not in rej_ids]
+        meta = json.load(open(d / "done.json"))
+        # Detect ran with an older mask: what has been closed since (leaves, for
+        # one) must not set the generator's brightness and speed.
+        H, W = meta["shape"]
+        roi = roi_for(args, np.zeros((H, W, 3), np.uint8))
+
+        def open_area(t):
+            return sum(RL.in_roi(roi, x.x, x.y) for x in t.dets) * 2 >= len(t.dets)
+
+        keep = [t for t in blob["accepted"] if t.id not in rej_ids and open_area(t)]
+        n_closed = sum(t.id not in rej_ids and not open_area(t) for t in blob["accepted"])
         # brightness of every coherent track in the footage, kept or not --
         # used only to set the generator's upper brightness bound (see synth)
         footage_peaks += [x.peak for t in blob["accepted"] + blob["rejected"]
-                          if len(t.dets) >= cfg.track.min_track_len for x in t.dets]
-        meta = json.load(open(d / "done.json"))
+                          if len(t.dets) >= cfg.track.min_track_len and open_area(t)
+                          for x in t.dets]
         c = Config.load(d / "config.json")
         verified_rows += T.summarize(keep, c.track)
         ratios.append(meta.get("step_ratio"))
@@ -552,7 +564,7 @@ def stage_tiles(args, cfg):
         if bg_paths:
             bg_runs.append((d.name, bg_paths))
         log(f"  {d.name}: {len(keep)} verified "
-            f"({len(rej_ids)} manually rejected)")
+            f"({len(rej_ids)} manually rejected, {n_closed} outside the mask)")
 
     if not verified_rows:
         raise SystemExit("no verified tracks -- check the detect stage output")

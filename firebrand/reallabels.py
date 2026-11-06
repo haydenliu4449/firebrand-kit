@@ -77,14 +77,27 @@ def review_is_current(work, name):
     return rej.exists() and (not done.exists() or rej.stat().st_mtime >= done.stat().st_mtime)
 
 
-def clip_labels(work, name, min_conf=0.8, max_w=12.0, dedupe_px=10.0):
+def in_roi(roi, x, y):
+    """Is pixel (x, y) inside the mask's open area? No mask: everything is."""
+    if roi is None:
+        return True
+    h, w = roi.shape[:2]
+    return bool(roi[min(max(int(y), 0), h - 1), min(max(int(x), 0), w - 1)] > 0)
+
+
+def clip_labels(work, name, min_conf=0.8, max_w=12.0, dedupe_px=10.0, roi=None):
     """{frame: (n, 5) array of x, y, L, W, theta} of firebrands to train on,
     plus counts. A detection too wide to be one streak (max_w, px; neighbours
     merged at the classical threshold) is not a label -- it is removed from
-    the frame like any other unlabelled blob."""
+    the frame like any other unlabelled blob.
+
+    Nor is anything outside `roi`. Detect ran with an older mask, so its
+    "verified" tracks include what has been closed since: 5,857 tracks on sunlit
+    leaves above the old mask's top edge (72% of clip11's verified detections).
+    The residual is zero there now, so a label would teach firing on nothing."""
     work = Path(work)
     per = {}
-    n_cls = n_mod = n_wide = n_dup = 0
+    n_cls = n_mod = n_wide = n_dup = n_out = 0
 
     pk = work / "clips" / name / "tracks.pkl"
     if pk.exists() and (work / "clips" / name / "done.json").exists():
@@ -118,6 +131,9 @@ def clip_labels(work, name, min_conf=0.8, max_w=12.0, dedupe_px=10.0):
             c.append((d.x, d.y, d.L, d.W, d.theta))
         rows = []
         for x, y, L, W, th in m + c:
+            if not in_roi(roi, x, y):
+                n_out += 1
+                continue
             if W > max_w:
                 n_wide += 1
                 continue
@@ -126,7 +142,8 @@ def clip_labels(work, name, min_conf=0.8, max_w=12.0, dedupe_px=10.0):
         n_cls += len(c)
         if rows:
             out[f] = np.array(rows, np.float32)
-    return out, dict(classical=n_cls, model=n_mod, both=n_dup, too_wide=n_wide)
+    return out, dict(classical=n_cls, model=n_mod, both=n_dup, too_wide=n_wide,
+                      outside_mask=n_out)
 
 
 def label_runs(name, path, fps, labels, n_frames, block=BLOCK):

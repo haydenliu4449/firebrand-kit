@@ -285,6 +285,12 @@ window of the top band (y 0-768), clip5 frames 80-119 and clip9 140-179:
   are also --real-positives labels, so they should go before the next train.
 - Verified held-out detections, within max(15 px, L/2 + 5): 61% tagged, 14% seen and
   dropped by the tracker, 25% never seen (faint: median peak ~15 vs ~50, L ~5 vs ~12).
+- **Mask v3 and labels** (`masks/left_front_v3.json` = v2 + the canopy strip). Real
+  labels and the generator's fit now drop anything outside the mask
+  (`reallabels.in_roi`), so a retrain does not need reject.txt edited or detect
+  re-run. Outside v3: 18,803 of 177,260 verified detections (clip11 70%, clip8 44%),
+  3,857 of 544,587 model ones. evaluate_tags still scores against all verified
+  tracks, leaves included: compare like with like (work/mask_review/nocanopy.py).
 - Model-only tracks: 22,066 held out. Sheets from clip5 (2 of 36 looked at) show
   real embers, no texture, but some long tracks change streak angle between crops,
   i.e. hop (finding 5). Precision on quiet footage still unmeasured: the eval stage's
