@@ -252,12 +252,22 @@ def detect_frame(res, frame_index, cfg: DetectConfig, edge=None):
         area = int(stats[i, cv2.CC_STAT_AREA])
         if area < cfg.min_area:
             continue
-        ys, xs = np.where(lab == i)
+        ys, xs = blob_pixels(lab, stats, i)
         for pys, pxs in split_cores(ys, xs, res, frac, cfg.min_area):
             d = fit_streak(pys, pxs, res, frame_index, cfg)
             if d is not None:
                 out.append(d)
     return out
+
+
+def blob_pixels(lab, stats, i):
+    """Pixels of component i, looking only inside its own box. `np.where(lab == i)`
+    gives the same answer by scanning all 8.3 M pixels of a 4K frame, per blob:
+    at ~190 blobs a frame that was nearly all of a tag job's time."""
+    x, y = int(stats[i, cv2.CC_STAT_LEFT]), int(stats[i, cv2.CC_STAT_TOP])
+    w, h = int(stats[i, cv2.CC_STAT_WIDTH]), int(stats[i, cv2.CC_STAT_HEIGHT])
+    ys, xs = np.where(lab[y:y + h, x:x + w] == i)
+    return ys + y, xs + x
 
 
 def split_cores(ys, xs, res, frac, min_area):

@@ -74,7 +74,7 @@ def detections_from_map(prob, frame_index, cfg: Config, thresh=0.5, roi_mask=Non
     for i in range(1, n):
         if int(stats[i, cv2.CC_STAT_AREA]) < dcfg.min_area:
             continue
-        ys, xs = np.where(lab == i)
+        ys, xs = D.blob_pixels(lab, stats, i)
         for pys, pxs in D.split_cores(ys, xs, res, frac, dcfg.min_area):
             d = D.fit_streak(pys, pxs, p8, frame_index, dcfg, shape_gate=False)
             if d is not None:

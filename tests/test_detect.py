@@ -62,6 +62,18 @@ def test_core_filling_its_box():
     assert D.split_cores(ys, xs, full, 0.05, 5)   # frac so low the core IS the whole box
 
 
+def test_blob_pixels_same_as_whole_frame_scan():
+    import cv2
+    rng = np.random.default_rng(0)
+    bw = (rng.random((120, 200)) > 0.93).astype(np.uint8)
+    n, lab, st, _ = cv2.connectedComponentsWithStats(cv2.dilate(bw, np.ones((2, 2), np.uint8)), 8)
+    assert n > 5
+    for i in range(1, n):
+        a = np.where(lab == i)
+        b = D.blob_pixels(lab, st, i)
+        assert np.array_equal(a[0], b[0]) and np.array_equal(a[1], b[1]), i
+
+
 def test_off_means_off():
     res = np.zeros((20, 60), np.uint8)
     res[8:12, 5:55] = 15
