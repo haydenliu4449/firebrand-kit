@@ -38,11 +38,14 @@ detection, tracking, negatives or training.
 - In Cloud Shell: `$HOME` is 5 GB and the VM stops after ~40 min idle (jobs
   keep running; `claude -c` resumes this session). Don't pull overlay videos
   in bulk.
+- Cloud Shell restarts often and wipes `/tmp`, including Claude's scratchpad. Any
+  local run over a few minutes writes results as it goes to the git-ignored
+  `work/` and skips finished work on rerun (`work/recall_review/` is the example).
 
 ## Commands
 | what | command |
 |---|---|
-| unit tests (seconds, no torch) | `python3 tests/test_negatives.py && python3 tests/test_reallabels.py` |
+| unit tests (seconds, no torch) | `python3 tests/test_negatives.py && python3 tests/test_reallabels.py && python3 tests/test_detect.py && python3 tests/test_resting.py` |
 | tracker benchmark (~10 s) | `python3 tests/benchmark.py` (`--ablate` for ablations) |
 | submit a step | `bash scripts/04-submit_job.sh <smoke\|detect\|tiles\|train\|tag> [-- run_all.py args]` |
 | job state / logs | `bash scripts/06-jobs.sh [list\|running\|status JOB\|logs JOB\|log JOB N]` |
@@ -98,18 +101,19 @@ modules: `pip3 install --user opencv-python-headless scipy pandas`.
 - `batch_entry.py`: container entry on Batch; `scripts/`: 00 setup … 06 jobs
 - `firebrand/`: `frames` (decode, IR check), `detect`, `track`, `synth`,
   `dataset`, `model`, `train`, `infer`, `evaluate`, `review` (contact
-  sheets), `negatives`, `reallabels`, `gcsio`
+  sheets), `negatives`, `reallabels`, `resting`, `gcsio`
 - Local tools: `evaluate_tags.py`, `suggest_negatives.py`, `make_mask.py`,
   `run_pipeline.py` (one clip through detect/track, e.g. to check a mask)
 - `tests/`: unit tests, `benchmark.py`, `smoke_train.py` (the smoke job)
 - Legacy, don't use: `cloud/` (old Workbench VM scripts), `notebooks/`
 
-## Last known state (2026-10-23)
+## Last known state (2026-11-06)
+- Recall work (approach.md finding 9) is committed locally and NOT pushed: the
+  user pushes. Effect on real recall unmeasured. Next: user pushes → rebuild
+  image → `tag -- --force --overlay` → `evaluate_tags.py --heldout`.
 - Negatives: 30-min firebrand-free video `D01_20250107230423` in `negclips/`
   (3 stretches, ~26 s) in `work/negatives.txt`.
-- `--real-positives` added and its empty-CSV crash fixed; the first full
-  train with it had not been reported. Next: baseline
-  `evaluate_tags.py --heldout` → review model-only sheets → `train -- --force
-  --real-positives` → re-tag → compare `--heldout`.
-- Open: track identity in dense showers (approach.md finding 5); joining
-  descent+ascent pieces per hop; exposure time, true capture rate, IR switching.
+- Open: `--real-positives` retrain not reported; track identity in dense showers
+  (finding 5); chance alignments in dense showers, up to ~10-15% of clip5's
+  tracks (finding 9); joining descent+ascent pieces per hop; exposure time, true
+  capture rate, IR switching.

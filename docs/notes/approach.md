@@ -226,6 +226,47 @@ of unlabelled real embers labelled 0 (directly against recall). Added
   Guard: review model-only sheets; or `--real-min-conf 0.9`. Helps "no box"
   misses only; yellow-box misses are the tracker.
 
+**9. (2026-11-06) Raising recall: merged blobs, 2-frame embers, resting embers.**
+User: false positives are rare but most firebrands (>80%) go untagged. Measured
+locally with a numpy copy of the U-Net (model from 2026-10-23), on a 40-frame
+window of the top band (y 0-768), clip5 frames 80-119 and clip9 140-179:
+- The threshold is not the limit. Without splitting, 0.8 / 0.5 / 0.2 gave 854 /
+  824 / 828 tracks on clip5. The losses are later: merged blobs, and pieces too
+  short to accept.
+- **Core splitting** (`detect.split_frac` 0.5, `detect.split_cores`): each blob is
+  re-thresholded at half its own peak. The model's map saturates, so `infer` uses
+  the centre residual for this. clip5 tracks 854 -> 1016, detections per frame
+  185 -> 245, and the step ratio goes 0.87 -> 1.01.
+- **Pair acceptance** (`track.pair_ok`, tag and eval only): a 2-detection track
+  passes if both streaks are elongated, lie along the step, and the step fits
+  step_ratio x length. clip5 +184 tracks, clip9 +53. Off for the classical
+  detector, whose tracks are training labels.
+- **Resting embers** (`firebrand/resting.py`, `resting.csv`): landed embers fade
+  into the rolling median, so the model cannot see them. Compared against a scene
+  reference (second smallest of the clips' medians). 1,626 candidates over the 10
+  clips. Not tracks and not used for training.
+- **Chance control.** Giving every frame its own random shift (250-600 px) kills
+  all real motion; what is still accepted is chance. clip5: 16-19 pairs (of 184)
+  and 107-161 tracks of 3+ (of 1015); detections in tracks 68% -> 4-6%. These are
+  upper bounds, since real tracks use up detections chance would otherwise get.
+  So up to ~10-15% of clip5's tracks may be chance alignments: a dense-shower
+  cost of the existing acceptance rule, not of pairs. Shifting only odd frames is
+  NOT a valid control: the linker's frame gap links even to even, and 3+ tracks
+  stayed ~1000.
+- Eye review. Pairs: ~20 of 24 on clip5 sit on real streaks, 3-4 doubtful.
+  Resting: ~25 of 30 unique spots and ~17 of 30 spots repeated in other clips look
+  real; the false ones are wall edges, foliage, cracks and puddle rims. Repeat
+  counting would throw out real embers (they land in the same places), so the
+  filter is scene strength instead: `max_scene` 20 within 8 px kept 38 of 40 real
+  and 8 of 15 false, on those tiles. A small sample; 20 is a sensible value, not
+  a tuned one.
+- Eval now picks the lowest threshold within `--max-empty-fp` on firebrand-free
+  footage, not best F1: the sweep paints on frames with real unlabelled embers,
+  so F1 counted real finds as errors and always chose 0.8.
+- Not verified: real recall. Counts above are tracks, not firebrands confirmed.
+  Next: rebuild, tag, then `evaluate_tags.py --heldout`. Detect also picks up
+  `split_frac` if rerun, which would change the classical labels.
+
 ## Pipeline (as implemented in firebrand-kit)
 
 0. Decode with `ffmpeg -vsync 0`; audit for DVR-padded duplicate frames (a 0.5
@@ -330,8 +371,7 @@ but biased physically).
   bounce yields descent (ending at the contact) + ascent as two tracks — joining
   them per hop is still to do for saltation statistics.
 - Embers that sit still for more than ~5 frames fade into the 11-frame rolling
-  median; if missed embers are stationary on the ground, try
-  `--set detect.median_window=31`.
+  median. The tag stage now finds those separately (finding 9, `resting.csv`).
 - `track.stitch()` exists but is **off by default**. Enable if fragmentation
   exceeds ~1.3 (now 1.22 on the benchmark).
 - The negatives changes (finding 4) are verified for plumbing only (tiles,

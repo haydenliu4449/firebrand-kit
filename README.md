@@ -357,7 +357,13 @@ Reading the new overlay tells you where any remaining misses are lost:
 |---|---|---|
 | a thin yellow box | the tracker | `--set track.max_heading_change_deg=45`, `--set track.max_gap=3` |
 | no box at all | the model | `--threshold 0.3` on the tag step; more training data (`--synth-frames 600` on train) |
-| no box, and it is sitting still on the ground | background subtraction (an ember that stays put for more than ~5 frames fades into the rolling median) | `--set detect.median_window=31` on detect and tag |
+| no box, and it is sitting still on the ground | background subtraction (an ember that stays put for more than ~5 frames fades into the rolling median) | the tag step finds these separately: they are in `work/tags/<clip>/resting.csv` and circled in cyan on the overlay |
+
+The tag step also accepts 2-frame tracks when the streak geometry confirms them,
+and splits embers merged into one blob. `--no-pairs` and `--no-resting` turn off
+the pairs and the resting pass. `resting.csv` lists candidates, not confirmed
+embers: about 4 in 5 looked real when checked by eye, and the misses are mostly
+wall edges, foliage and cracks. It is not used for training.
 
 `--set SECTION.KEY=VALUE` changes any setting in `firebrand/config.py` for one
 job, without rebuilding: `bash scripts/04-submit_job.sh tag -- --force --overlay
