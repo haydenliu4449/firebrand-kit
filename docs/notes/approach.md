@@ -247,10 +247,12 @@ window of the top band (y 0-768), clip5 frames 80-119 and clip9 140-179:
   clips. Not tracks and not used for training.
 - **Chance control.** Giving every frame its own random shift (250-600 px) kills
   all real motion; what is still accepted is chance. clip5: 16-19 pairs (of 184)
-  and 107-161 tracks of 3+ (of 1015); detections in tracks 68% -> 4-6%. These are
-  upper bounds, since real tracks use up detections chance would otherwise get.
-  So up to ~10-15% of clip5's tracks may be chance alignments: a dense-shower
-  cost of the existing acceptance rule, not of pairs. Shifting only odd frames is
+  and 107-161 tracks of 3+ (of 1015); detections in tracks 68% -> 4-6%. clip9
+  (66 detections per frame against clip5's 247): 3-4 pairs (of 53) and 9-15 tracks
+  of 3+ (of 254); 58% -> 1-2%. These are upper bounds, since real tracks use up
+  detections chance would otherwise get. So up to ~10-15% of clip5's tracks may be
+  chance alignments, ~5% on quieter clip9: a dense-shower cost of the existing
+  acceptance rule, not of pairs. Shifting only odd frames is
   NOT a valid control: the linker's frame gap links even to even, and 3+ tracks
   stayed ~1000.
 - Eye review. Pairs: ~20 of 24 on clip5 sit on real streaks, 3-4 doubtful.
