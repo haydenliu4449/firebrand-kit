@@ -308,6 +308,16 @@ window of the top band (y 0-768), clip5 frames 80-119 and clip9 140-179:
   joins: 8.5 GB, before torch and workers (not measured). Saved tiles byte-identical
   (tests/test_tiles.py). Real masks are float 0..1, so `.astype(Y.dtype)` would have
   zeroed them against uint8 Y: use `to_mask8`.
+- **First train with negatives** (fb-train-20261106-235436, 66 min, model backed up at
+  runs/streak_20261107). 17,908 tiles: 11,301 synthetic, 3,705 real, 2,902 negative
+  (334 hard). Pixel val F1 0.52 -> 0.66. Held-out empty footage, 154 frames, none
+  dropped: 16.9 false tracks per 100 frames at 0.8, 21-40 below it, so nothing meets
+  `--max-empty-fp` 1.0 and eval falls back to 0.8. Counts are small (26 tracks at
+  0.8) and not monotonic in threshold. Where they fall is not measured. Against
+  the 10-23 model's ~1,700 tracks per 100 frames in the clips (704 on the quietest)
+  that is ~1-2.4%, if the empty video's rate carries over. Synthetic P fell to
+  0.12 (classical 0.59), but that sweep paints on clip frames with real unlabelled
+  embers, so it cannot separate false alarms from finds.
 - Model-only tracks: 22,066 held out. Sheets from clip5 (2 of 36 looked at) show
   real embers, no texture, but some long tracks change streak angle between crops,
   i.e. hop (finding 5). Precision on quiet footage still unmeasured: the eval stage's
