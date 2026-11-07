@@ -369,6 +369,30 @@ changes, the pairs and the resting pass. `resting.csv` lists candidates, not con
 embers: about 4 in 5 looked real when checked by eye, and the misses are mostly
 wall edges, foliage and cracks. It is not used for training.
 
+### Trajectories: one ember from start to landing
+
+Every tagged firebrand has a `track_id`. A track ends at any sharp turn, so one
+saltating ember is several tracks: its fall, then its rise after each bounce. The
+tag step joins them into trajectories and writes, per clip:
+
+- `trajectories.csv`: one row per ember, with its `track_ids` in order, `n_hops`,
+  the ground `contacts` (`frame:x,y` per bounce) and `landed_resting_id` (the
+  `resting.csv` ember it came to rest as, or -1);
+- a `trajectory_id` column on every row of `detections.csv`, so a trajectory's
+  path is `detections.csv` filtered on it, in frame order.
+
+For tags made before 2026-11-07, or after changing the rules, run it on the tags you
+have (no GPU needed), with path views of the trajectories with most hops:
+
+```bash
+python3 trajectories.py --views 12 --clips clips/
+# work/tags/<clip>/paths/traj_<id>.jpg: the frames stacked, each track a colour, contacts circled
+```
+
+Look at the path views before trusting a trajectory from a dense shower: in synthetic
+showers about 6% of trajectories mix two embers (4% of tracks already do).
+Positions are in pixels.
+
 `--set SECTION.KEY=VALUE` changes any setting in `firebrand/config.py` for one
 job, without rebuilding: `bash scripts/04-submit_job.sh tag -- --force --overlay
 --set track.max_gap=3`. It is logged at the top of the job's output.

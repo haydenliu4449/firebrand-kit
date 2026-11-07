@@ -58,7 +58,7 @@ import pandas as pd
 from firebrand import Config, frames as F, detect as D, track as T, review as R
 from firebrand.config import SynthConfig
 from firebrand import synth as S, dataset as DS, evaluate as E, gcsio
-from firebrand import negatives as NG, reallabels as RL, resting as RS
+from firebrand import negatives as NG, reallabels as RL, resting as RS, trajectory as TJ
 
 VIDEO_EXTS = {".mp4", ".avi", ".mov", ".mkv", ".m4v"}
 
@@ -1126,6 +1126,9 @@ def stage_tag(args, cfg):
                                         "looks", "peak", "area"]) \
                 .to_csv(out / "resting.csv", index=False)
 
+        # One ember across its hops, and where it came to rest (firebrand/trajectory.py).
+        traj = TJ.write_clip(out, acc, rest, W)
+
         if args.overlay:
             by, cby = {}, {}
             for tr in acc:
@@ -1150,12 +1153,14 @@ def stage_tag(args, cfg):
             classical = json.load(open(det_done)).get("n_accepted")
         n_det = sum(len(v) for v in dets.values())
         log(f"  {name}: {n_det} model detections -> {len(acc)} accepted tracks, "
-            f"{len(cand)} detections not in any accepted track, {len(rest)} resting embers"
+            f"{len(cand)} detections not in any accepted track, {len(rest)} resting embers, "
+            f"{len(traj)} trajectories ({sum(r['n_hops'] for r in traj)} hops)"
             + (f" (classical detector: {classical})" if classical is not None else ""))
         with open(flag, "w") as fh:
             json.dump({"clip": clip, "n_frames": n_frames, "shape": [H, W],
                        "threshold": thresh, "n_detections": n_det,
                        "n_tracks": len(acc), "n_resting": len(rest),
+                       "n_trajectories": len(traj),
                        "classical_n_accepted": classical,
                        "model": str(ck)}, fh, indent=2)
 

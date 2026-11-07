@@ -379,6 +379,32 @@ canopy strip; harness work/tracker/ (retrack.py, cover.py, chance.py).
 - Not measured yet: the change on a fresh tag job (overlays, all frames). Expect
   fewer, longer tracks, and boxes that span whole streaks.
 
+**11. (2026-11-07) Trajectories: one ember across its hops and to where it lands.**
+User: the end goal is each firebrand's trajectory. Tracks already carry IDs, but the
+tracker cuts a track at every sharp turn, so a bounce = two tracks, and a landed
+ember drops out of the tracks into resting.csv. `firebrand/trajectory.py` joins
+them; `trajectories.py` runs it on existing tags; the tag stage writes it too
+(trajectories.csv, trajectory_id on every detection).
+- Rule: track A ends going down, track B starts going up 1-2 frames later, within
+  what the speeds allow + 6 px (at 1920 wide), same horizontal direction (flip <= 10%
+  of speed), B no faster than 1.1x A; each a real vertical move (>= 20% of speed).
+  A trajectory ending within 8 px of a resting ember that first shows up to 36
+  frames later landed there.
+- Synthetic saltation (benchmark generator, exact ids through bounces, 3 seeds each):
+  bouncing embers kept in one piece (>= 80% of their detections) sparse 29/66 as tracks
+  -> 52/66 as trajectories, dense (15-30 per frame) 72/203 -> 115/203. Wrong groups
+  (< 80% one ember) sparse 1/122 -> 1/93, dense 4.0% -> 6.4%: joining adds ~2.4 points
+  of mixing in dense showers. Looser rules (3-frame gap, 10 px, speed 1.3) kept no more
+  and mixed 9.2%.
+- The vertical rule matters on real footage: without it, near-level embers that wobble
+  a pixel were "bouncing" (clip5 144 hop trajectories -> 58). Path views (max over the
+  frames, boxes, contacts) in work/tags/<clip>/paths/ with --views N.
+- Real tags (11-07 model, previous tracker): clip5 58 trajectories with hops (59
+  contacts), 76 ending at a resting ember; clip2 315 (329), 168; clip9 35 (37), 2.
+- Not done: contacts in metres (paver homography), hop length and apex per hop, joining
+  a hop across a gap of more than 2 frames, and a check of real hops by eye beyond a
+  handful of path views.
+
 ## Pipeline (as implemented in firebrand-kit)
 
 0. Decode with `ffmpeg -vsync 0`; audit for DVR-padded duplicate frames (a 0.5

@@ -45,7 +45,7 @@ detection, tracking, negatives or training.
 ## Commands
 | what | command |
 |---|---|
-| unit tests (seconds, no torch) | `python3 tests/test_negatives.py && python3 tests/test_reallabels.py && python3 tests/test_detect.py && python3 tests/test_resting.py && python3 tests/test_tiles.py && python3 tests/test_track.py` |
+| unit tests (seconds, no torch) | `python3 tests/test_negatives.py && python3 tests/test_reallabels.py && python3 tests/test_detect.py && python3 tests/test_resting.py && python3 tests/test_tiles.py && python3 tests/test_track.py && python3 tests/test_trajectory.py` |
 | tracker benchmark (~10 s) | `python3 tests/benchmark.py` (`--ablate` for ablations) |
 | submit a step | `bash scripts/04-submit_job.sh <smoke\|detect\|tiles\|train\|tag> [-- run_all.py args]` |
 | job state / logs | `bash scripts/06-jobs.sh [list\|running\|status JOB\|logs JOB\|log JOB N]` |
@@ -104,8 +104,9 @@ modules: `pip3 install --user opencv-python-headless scipy pandas`.
 - `batch_entry.py`: container entry on Batch; `scripts/`: 00 setup … 06 jobs
 - `firebrand/`: `frames` (decode, IR check), `detect`, `track`, `synth`,
   `dataset`, `model`, `train`, `infer`, `evaluate`, `review` (contact
-  sheets), `negatives`, `reallabels`, `resting`, `gcsio`
-- Local tools: `evaluate_tags.py`, `suggest_negatives.py`, `make_mask.py`,
+  sheets), `negatives`, `reallabels`, `resting`, `trajectory`, `gcsio`
+- Local tools: `evaluate_tags.py`, `trajectories.py` (tracks -> trajectories on existing
+  tags, path views), `suggest_negatives.py`, `make_mask.py`,
   `run_pipeline.py` (one clip through detect/track, e.g. to check a mask)
 - `tests/`: unit tests, `benchmark.py`, `smoke_train.py` (the smoke job)
 - Legacy, don't use: `cloud/` (old Workbench VM scripts), `notebooks/`
@@ -116,10 +117,11 @@ modules: `pip3 install --user opencv-python-headless scipy pandas`.
   fewer false tracks on empty footage than the 10-23 model (finding 9): keep it.
   Earlier tags: `work/tags_20261106`, `work/tags_before_20261023`; bucket
   `work/tags_20261106`. Models: bucket `runs/streak_20261023`, `runs/streak_20261107`.
-- Tracker changes for tagging committed (finding 10: verified tracks covered 59.3% ->
-  64.7%, empty-footage false tracks halved). Next: user pushes → rebuild → `tag --
-  --force --overlay` → `python3 work/tracker/cover.py`-style scoring on the new tags.
-  Faint long streaks remain the main miss; a matched line filter did not work.
+- Tracker changes (finding 10) are in tag job fb-tag-20261107-222905 (image built
+  before trajectories). Trajectories (finding 11) committed: run `python3
+  trajectories.py` on the new tags. Methodology + change log for the lab:
+  https://claude.ai/artifact/J5UvGqMa53v3gg2M1zWioo (keep it in step with approach.md).
+- Faint long streaks remain the main miss; a matched line filter did not work.
   L4 VMs can be scarce: queueing is free, so wait.
 - Negatives: 30-min firebrand-free video `D01_20250107230423` in `negclips/`
   (3 stretches, ~26 s) in `work/negatives.txt`.
