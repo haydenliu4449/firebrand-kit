@@ -100,9 +100,7 @@ def run_clip(model, source, cfg: Config, roi_mask=None, thresh=0.5,
         if progress and k % 25 == 0:
             progress(k)
 
-    ratio = T.estimate_step_ratio(dets, cfg.track)
-    tracks = T.link(dets, cfg.track, step_ratio=ratio)
-    return dets, T.accept(tracks, cfg.track, step_ratio=ratio)
+    return T.track_detections(dets, cfg.track)
 
 
 def sweep_threshold(model, source, cfg, gt_by_frame, roi_mask=None,

@@ -891,11 +891,9 @@ def stage_eval(args, cfg):
             n_tr = 0
             for key, by in dets[th].items():
                 c = seg_cfg[key]
-                # Judged exactly as tag will judge them, pairs included.
-                c.track.accept_pairs = not args.no_pairs
-                ratio = T.estimate_step_ratio(by, c.track)
-                n_tr += len(T.accept(T.link(by, c.track, step_ratio=ratio), c.track,
-                                     step_ratio=ratio))
+                # Judged exactly as tag will judge them: same tracker settings.
+                tag_tracker(c.track, args)
+                n_tr += len(T.track_detections(by, c.track)[1])
             rates[th] = 100.0 * n_tr / max(n_used, 1)
         for r in sweep:
             r["false_tracks_per_100_empty_frames"] = rates[r["threshold"]]
@@ -958,6 +956,20 @@ def stage_eval(args, cfg):
 # ---------------------------------------------------------------------------
 # stage: tag -- the point of the whole exercise
 # ---------------------------------------------------------------------------
+
+def tag_tracker(tcfg, args):
+    """The tracker settings for the model's detections (tag, and eval's count on
+    empty footage). The classical detector keeps the stricter defaults: its tracks
+    are training labels. Measured on stored tags, held-out frames (finding 10):
+    verified tracks covered 59.3% -> 64.7%, false tracks on empty footage 6.9 -> 3.4
+    per 100 frames, chance tracks in dense showers no worse."""
+    tcfg.accept_pairs = not args.no_pairs
+    if not args.classic_tracker:
+        tcfg.merge_collinear = True          # pieces of one streak -> one detection
+        tcfg.stitch = True                   # two halves of one ember -> one track
+        tcfg.max_gap = max(tcfg.max_gap, 4)  # an ember may dim for a few frames
+    return tcfg
+
 
 def scene_reference(args, work):
     """The scene with no embers on it, built once from every clip and kept in
@@ -1064,7 +1076,7 @@ def stage_tag(args, cfg):
         elif F.is_ir(first):
             c.detect.channel = "gray"
         c.train = tcfg
-        c.track.accept_pairs = not args.no_pairs
+        tag_tracker(c.track, args)
         roi = roi_for(args, first)
 
         with Timer(f"  {name}: tagging {n_frames} frames at threshold {thresh}"):
@@ -1255,6 +1267,9 @@ def main(argv=None):
     ap.add_argument("--no-pairs", action="store_true",
                     help="tag/eval: only tracks of 3+ frames, not 2-frame ones the "
                          "streak geometry confirms")
+    ap.add_argument("--classic-tracker", action="store_true",
+                    help="tag/eval: the tracker as before 2026-11-07 (no merging of "
+                         "streak pieces, no stitching, max_gap 2)")
     ap.add_argument("--no-resting", action="store_true",
                     help="tag: skip the pass that finds embers lying still (resting.csv)")
     ap.add_argument("--set", action="append", default=[], metavar="SECTION.KEY=VALUE",

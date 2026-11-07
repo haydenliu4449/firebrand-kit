@@ -45,7 +45,7 @@ detection, tracking, negatives or training.
 ## Commands
 | what | command |
 |---|---|
-| unit tests (seconds, no torch) | `python3 tests/test_negatives.py && python3 tests/test_reallabels.py && python3 tests/test_detect.py && python3 tests/test_resting.py && python3 tests/test_tiles.py` |
+| unit tests (seconds, no torch) | `python3 tests/test_negatives.py && python3 tests/test_reallabels.py && python3 tests/test_detect.py && python3 tests/test_resting.py && python3 tests/test_tiles.py && python3 tests/test_track.py` |
 | tracker benchmark (~10 s) | `python3 tests/benchmark.py` (`--ablate` for ablations) |
 | submit a step | `bash scripts/04-submit_job.sh <smoke\|detect\|tiles\|train\|tag> [-- run_all.py args]` |
 | job state / logs | `bash scripts/06-jobs.sh [list\|running\|status JOB\|logs JOB\|log JOB N]` |
@@ -116,9 +116,11 @@ modules: `pip3 install --user opencv-python-headless scipy pandas`.
   fewer false tracks on empty footage than the 10-23 model (finding 9): keep it.
   Earlier tags: `work/tags_20261106`, `work/tags_before_20261023`; bucket
   `work/tags_20261106`. Models: bucket `runs/streak_20261023`, `runs/streak_20261107`.
-- Recall did not rise with the retrain. Next ideas: tracker drops ~14% of what the
-  model sees; faint short embers (25%) are never seen. L4 VMs can be scarce: a job
-  sat queued 2.6 h; queueing is free, so wait.
+- Tracker changes for tagging committed (finding 10: verified tracks covered 59.3% ->
+  64.7%, empty-footage false tracks halved). Next: user pushes → rebuild → `tag --
+  --force --overlay` → `python3 work/tracker/cover.py`-style scoring on the new tags.
+  Faint long streaks remain the main miss; a matched line filter did not work.
+  L4 VMs can be scarce: queueing is free, so wait.
 - Negatives: 30-min firebrand-free video `D01_20250107230423` in `negclips/`
   (3 stretches, ~26 s) in `work/negatives.txt`.
 - Open: `--real-positives` retrain not reported; track identity in dense showers

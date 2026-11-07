@@ -355,13 +355,17 @@ Reading the new overlay tells you where any remaining misses are lost:
 
 | a missed firebrand has... | it was lost in... | try |
 |---|---|---|
-| a thin yellow box | the tracker | `--set track.max_heading_change_deg=45`, `--set track.max_gap=3` |
+| a thin yellow box | the tracker | `--set track.max_heading_change_deg=45`; a longer gap than the tag step's 4 needs a code change (`run_all.tag_tracker`) |
 | no box at all | the model | `--threshold 0.3` on the tag step; more training data (`--synth-frames 600` on train) |
 | no box, and it is sitting still on the ground | background subtraction (an ember that stays put for more than ~5 frames fades into the rolling median) | the tag step finds these separately: they are in `work/tags/<clip>/resting.csv` and circled in cyan on the overlay |
 
 The tag step also accepts 2-frame tracks when the streak geometry confirms them,
-and splits embers merged into one blob. `--no-pairs` and `--no-resting` turn off
-the pairs and the resting pass. `resting.csv` lists candidates, not confirmed
+and splits embers merged into one blob. Since 2026-11-07 it also joins the pieces of
+one long streak into a single box, lets a track skip up to 4 frames, and rejoins two
+halves of one ember: fewer, longer tracks, one box per streak, and half the false
+tracks on firebrand-free footage (`docs/notes/approach.md`, finding 10).
+`--classic-tracker`, `--no-pairs` and `--no-resting` turn these off: the tracker
+changes, the pairs and the resting pass. `resting.csv` lists candidates, not confirmed
 embers: about 4 in 5 looked real when checked by eye, and the misses are mostly
 wall edges, foliage and cracks. It is not used for training.
 

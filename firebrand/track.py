@@ -87,6 +87,71 @@ class Track:
 # linking
 # ---------------------------------------------------------------------------
 
+def merge_collinear(dets: list[Detection], cfg: TrackConfig) -> list[Detection]:
+    """Join the detections of one frame that are pieces of one streak.
+
+    Two pieces go together if they point the same way, each lies on the other's
+    line, and little separates their ends. A piece needs a direction to be judged,
+    so round blobs are left alone. The joined detection runs from end to end, which
+    is what the linker needs: step ~ step_ratio x L only holds for the whole streak.
+    """
+    n = len(dets)
+    if n < 2:
+        return dets
+    scale = cfg.max_step_px / TrackConfig().max_step_px      # 1920-wide px -> this clip
+    x = np.array([d.x for d in dets], float)
+    y = np.array([d.y for d in dets], float)
+    L = np.array([d.L for d in dets], float)
+    W = np.array([d.W for d in dets], float)
+    th = np.array([d.theta for d in dets], float)
+    ux, uy = np.cos(th), np.sin(th)
+    dx, dy = x[None, :] - x[:, None], y[None, :] - y[:, None]
+    along = dx * ux[:, None] + dy * uy[:, None]              # j as seen along i's axis
+    perp = np.abs(dy * ux[:, None] - dx * uy[:, None])
+    gap = np.abs(along) - (L[:, None] + L[None, :]) / 2.0
+    dth = np.abs(np.angle(np.exp(1j * (th[None, :] - th[:, None]))))
+    dth = np.minimum(dth, np.pi - dth)                       # a streak's angle is mod pi
+    directed = L / np.maximum(W, 1e-3) >= 1.5
+    ok = ((gap <= cfg.merge_gap_px * scale) & (perp <= cfg.merge_off_px * scale)
+          & (perp.T <= cfg.merge_off_px * scale) & (dth <= np.deg2rad(cfg.merge_ang_deg))
+          & directed[:, None] & directed[None, :])
+    np.fill_diagonal(ok, False)
+    if not ok.any():
+        return dets
+
+    root = list(range(n))
+
+    def find(i):
+        while root[i] != i:
+            root[i] = root[root[i]]
+            i = root[i]
+        return i
+
+    for i, j in zip(*np.nonzero(np.triu(ok))):
+        root[find(int(i))] = find(int(j))
+
+    groups: dict[int, list[int]] = {}
+    for i in range(n):
+        groups.setdefault(find(i), []).append(i)
+    out = []
+    for g in groups.values():
+        if len(g) == 1:
+            out.append(dets[g[0]])
+            continue
+        k = max(g, key=lambda i: L[i])                       # the longest piece sets the axis
+        pos = [(x[i] - x[k]) * ux[k] + (y[i] - y[k]) * uy[k] for i in g]
+        lo = min(p - L[i] / 2.0 for p, i in zip(pos, g))
+        hi = max(p + L[i] / 2.0 for p, i in zip(pos, g))
+        mid = (lo + hi) / 2.0
+        out.append(Detection(frame=dets[k].frame, x=float(x[k] + mid * ux[k]),
+                             y=float(y[k] + mid * uy[k]), L=float(hi - lo),
+                             W=float(max(W[i] for i in g)), theta=float(th[k]),
+                             peak=float(max(dets[i].peak for i in g)),
+                             area=int(sum(dets[i].area for i in g)),
+                             flux=float(sum(dets[i].flux for i in g))))
+    return out
+
+
 def link(dets_by_frame: dict[int, list[Detection]], cfg: TrackConfig,
          step_ratio: float | None = None) -> list[Track]:
     """Frame-to-frame assignment, solved optimally per frame pair.
@@ -119,19 +184,25 @@ def link(dets_by_frame: dict[int, list[Detection]], cfg: TrackConfig,
                 live.append(Track(next_id, [d])); next_id += 1
             continue
 
-        # cost = distance from prediction, gated per-track
-        C = np.full((len(live), len(dets)), 1e6, float)
+        # cost = distance from prediction, gated per-track. One array operation
+        # for the whole frame pair: a Python loop over tracks x detections was
+        # most of the linker's time in a dense shower (500 x 300 per frame).
+        c1 = np.empty((len(live), 2))
+        c2 = np.empty((len(live), 2))
+        gates = np.empty(len(live))
         for i, t in enumerate(live):
             cands, step = t.predict(cfg, step_ratio, fi)
+            c1[i], c2[i] = cands[0], cands[-1]
             # The gate must grow with the gap: predicting two frames ahead has
             # roughly twice the error of predicting one. Without this, max_gap
             # is silently inoperative -- the track survives but can never match.
             gap = max(fi - t.last().frame, 1)
-            gate = max(cfg.gate_frac * step * gap, 6.0)
-            for j, d in enumerate(dets):
-                dist = min(float(np.hypot(d.x - px, d.y - py)) for px, py in cands)
-                if dist <= gate:
-                    C[i, j] = dist
+            gates[i] = max(cfg.gate_frac * step * gap, 6.0)
+        dx = np.array([d.x for d in dets], float)[None, :]
+        dy = np.array([d.y for d in dets], float)[None, :]
+        dist = np.minimum(np.hypot(dx - c1[:, :1], dy - c1[:, 1:]),
+                          np.hypot(dx - c2[:, :1], dy - c2[:, 1:]))
+        C = np.where(dist <= gates[:, None], dist, 1e6)
 
         ri, ci = linear_sum_assignment(C)
         used = set()
@@ -144,6 +215,19 @@ def link(dets_by_frame: dict[int, list[Detection]], cfg: TrackConfig,
                 live.append(Track(next_id, [d])); next_id += 1
 
     return done + live
+
+
+def track_detections(dets_by_frame, cfg: TrackConfig):
+    """Detections -> (detections as linked, accepted tracks): the whole tracker as
+    tag and eval run it. merge_collinear and stitch follow cfg; the step ratio is
+    measured on what is linked."""
+    if cfg.merge_collinear:
+        dets_by_frame = {f: merge_collinear(v, cfg) for f, v in dets_by_frame.items()}
+    ratio = estimate_step_ratio(dets_by_frame, cfg)
+    tracks = link(dets_by_frame, cfg, step_ratio=ratio)
+    if cfg.stitch:
+        tracks = stitch(tracks, cfg)
+    return dets_by_frame, accept(tracks, cfg, step_ratio=ratio)
 
 
 def resolve_step_ratio(cfg: TrackConfig) -> float:
@@ -239,6 +323,14 @@ def stitch(tracks: list[Track], cfg: TrackConfig, max_frame_gap=4,
     lands close to the start of the second, and the headings agree.
     """
     order = sorted(tracks, key=lambda t: t.frames[0])
+    # Candidates by start frame, each list in `order`'s order: looking only at the
+    # tracks that start 1..max_frame_gap frames after this one ends visits the same
+    # tracks in the same order as scanning all of them, so the result is identical
+    # (tests/test_track.py) -- but a whole 4K clip has ~10^5 tracks, and the full
+    # scan is quadratic.
+    by_start: dict[int, list] = {}
+    for u in order:
+        by_start.setdefault(u.frames[0], []).append(u)
     used, out = set(), []
 
     for i, t in enumerate(order):
@@ -259,7 +351,8 @@ def stitch(tracks: list[Track], cfg: TrackConfig, max_frame_gap=4,
             h0 = np.arctan2(vy, vx)
 
             best, best_d = None, np.inf
-            for u in order:
+            for u in (u for f in range(end.frame + 1, end.frame + max_frame_gap + 1)
+                      for u in by_start.get(f, ())):
                 if id(u) in used:
                     continue
                 gap = u.frames[0] - end.frame

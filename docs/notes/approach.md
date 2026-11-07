@@ -341,6 +341,44 @@ window of the top band (y 0-768), clip5 frames 80-119 and clip9 140-179:
   tags (df[[]] selects columns), and it read only the first `count` frames, which
   left sheets blank.
 
+**10. (2026-11-07) Recall from the tracker; a dead end; a better yardstick.**
+User: keep raising recall. All measured locally on stored model detections
+(tags + candidates of the 11-07 model), held-out frames, verified tracks minus the
+canopy strip; harness work/tracker/ (retrack.py, cover.py, chance.py).
+- **The yardstick.** evaluate_tags matches centres within 5 or 15 px. A box that
+  covers a whole streak, where the classical detector boxed one dash of it, counts
+  as a miss. So also scored: a verified detection is found if it lies inside a tag's
+  oriented box (pad 4 px); a track if half its detections are.
+- **The verified set is not clean.** Besides the canopy strip (finding 9), clip4's
+  "never seen" verified tracks are largely a person walking through the frame. Of
+  what the model never sees, the real part is very faint, long, thin streaks.
+- **Matched line filter: dead end.** Residual summed along 16 orientations minus the
+  sides, with or without a temporal median of the response: at every threshold it
+  adds as many or more tracks on empty footage as on ember clips (k=14: 295 vs 170
+  per 100 frames on clip9; k=20: 25 vs 12). It finds scene lines and noise.
+- **Tracker options** (baseline -> chosen): verified tracks covered 59.3% -> 64.7%,
+  detections covered 55.2% -> 59.6%, false tracks on empty footage 6.9 -> 3.4 per 100
+  frames (29 frames), tracks -31% (one streak's pieces no longer count twice).
+  `merge_collinear` (pieces of one streak -> one detection), `max_gap` 4, `stitch`.
+  Gap 6 adds ~1 point; kept at 4 because the synthetic benchmark is too sparse to
+  show hopping (0 ID switches at every gap 2-6, mirrored equal).
+- **Chance control, done right.** Shift frame k by a cumulative 1000-1500 px x k in
+  one direction: nothing real can link. Independent per-frame shifts leak (two
+  neighbours get similar shifts), and so do 300-600 px steps (the inflated step
+  ratio reaches ~370 px). Chance tracks as % of real, clip5 / clip4, 4 seeds: baseline
+  5.3 / 7.0; merge 4.1 / 6.0; gap 4 5.5 / 6.9; stitch 6.5 / 7.7; looser pairs (step
+  tol 2, 30 deg, L/W 1.5) **10.1 / 13.0**; chosen set 5.2 / 6.5. Looser pairs dropped
+  (+0.5 point coverage, double chance).
+- Speed: `link` builds its cost matrix as one array (was a double loop) and `stitch`
+  looks only at tracks starting 1..4 frames after an end (was all of them). Both
+  proven identical to the old code (tests/test_track.py). Whole clip4 (212k
+  detections): 60 s with the tag settings, 42 s classic; classic reproduces the tag
+  job's 24,346 tracks exactly.
+- Tag and eval share `track.track_detections` with `run_all.tag_tracker`;
+  `--classic-tracker` restores the old settings. Classical detect is unchanged.
+- Not measured yet: the change on a fresh tag job (overlays, all frames). Expect
+  fewer, longer tracks, and boxes that span whole streaks.
+
 ## Pipeline (as implemented in firebrand-kit)
 
 0. Decode with `ffmpeg -vsync 0`; audit for DVR-padded duplicate frames (a 0.5

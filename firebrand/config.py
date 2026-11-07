@@ -212,6 +212,25 @@ class TrackConfig:
     The heading limit caught mostly smooth fast tracks with a single 27-31
     degree bend. Set False for the original whole-track behaviour."""
 
+    merge_collinear: bool = False
+    """Join detections that are pieces of one streak, before linking
+    (track.merge_collinear). The model's mask often breaks a long thin streak
+    into dashes: each dash is then a detection with the wrong centre and length.
+    On when tagging; the classical labels stay as they are."""
+
+    merge_gap_px: float = 12.0
+    """...if the space between their ends is at most this (px at 1920 wide)..."""
+
+    merge_off_px: float = 3.0
+    """...each lies on the other's line, within this (px at 1920 wide)..."""
+
+    merge_ang_deg: float = 15.0
+    """...and they point the same way, within this."""
+
+    stitch: bool = False
+    """Rejoin tracks that are two halves of one ember (track.stitch), before
+    acceptance. On when tagging."""
+
     accept_pairs: bool = False
     """Also accept a 2-detection track when the streak geometry confirms the
     link (track.pair_ok). Off for the classical detector, whose tracks are
