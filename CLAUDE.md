@@ -110,14 +110,15 @@ modules: `pip3 install --user opencv-python-headless scipy pandas`.
 - `tests/`: unit tests, `benchmark.py`, `smoke_train.py` (the smoke job)
 - Legacy, don't use: `cloud/` (old Workbench VM scripts), `notebooks/`
 
-## Last known state (2026-11-06)
-- Tagged 2026-11-06 with the 10-23 model and mask `left_front_v2.json`: held-out
-  recall 0.005 → 0.443 (0.509 without canopy tracks; finding 9). Old tags kept in
-  `work/tags_before_20261023`. Labels outside the mask are now dropped, and `MASK`
-  is `left_front_v3.json`. Train with negatives ran out of memory in tiles
-  (finding 9); fix committed. Next: user pushes → rebuild → `train -- --force
-  --real-positives` (first train with real negatives) → tag → compare. L4 VMs
-  were scarce on 2026-11-06: a job sat queued 2.6 h; queueing is free, so wait.
+## Last known state (2026-11-07)
+- Current tags (`work/tags`, bucket `work/tags`): retrained model, mask
+  `left_front_v3.json`. Held-out recall 0.434 (0.499 without canopy tracks), and 5x
+  fewer false tracks on empty footage than the 10-23 model (finding 9): keep it.
+  Earlier tags: `work/tags_20261106`, `work/tags_before_20261023`; bucket
+  `work/tags_20261106`. Models: bucket `runs/streak_20261023`, `runs/streak_20261107`.
+- Recall did not rise with the retrain. Next ideas: tracker drops ~14% of what the
+  model sees; faint short embers (25%) are never seen. L4 VMs can be scarce: a job
+  sat queued 2.6 h; queueing is free, so wait.
 - Negatives: 30-min firebrand-free video `D01_20250107230423` in `negclips/`
   (3 stretches, ~26 s) in `work/negatives.txt`.
 - Open: `--real-positives` retrain not reported; track identity in dense showers

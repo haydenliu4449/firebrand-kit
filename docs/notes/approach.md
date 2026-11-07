@@ -318,6 +318,19 @@ window of the top band (y 0-768), clip5 frames 80-119 and clip9 140-179:
   that is ~1-2.4%, if the empty video's rate carries over. Synthetic P fell to
   0.12 (classical 0.59), but that sweep paints on clip frames with real unlabelled
   embers, so it cannot separate false alarms from finds.
+- **Retrained model vs 10-23** (tag job fb-tag-20261107-065540, mask v3, 2.27 h).
+  82,964 tracks (10-23: 91,049); 8,571 lost, 3,786 gained, matched at 15 px.
+  Held-out recall vs verified, 10-23 -> new: 0.443 -> 0.434 at 5 px, 0.634 -> 0.619
+  at 15 px; without canopy tracks 0.509 -> 0.499 and 0.727 -> 0.713. So retraining
+  did NOT raise recall. By eye on 32 lost tracks: clip5 ~12-13 of 16 real, clip8
+  about half false (crack, shadow edge, sunlit leaves).
+  False tracks on held-out empty footage at 0.8, both models, same 29 frames (numpy
+  copy of the net, tag's rules incl. pairs): 10-23 **69** per 100 frames (20 tracks,
+  13.6 detections per frame), new **13.8** (4 tracks, 2.9). At 0.5: 110 vs 13.8. New
+  model's 13.8 fits the eval's 16.9 on all 154 frames, which supports the method.
+  Small counts, 29 of 40 planned frames (work/compare/). So ~5x fewer false alarms
+  for ~1 point of recall: keep the new model. Its false tracks cluster near the hedge
+  (x 640-1280, y 540-1080) and top right (x 3200+, y < 540).
 - Model-only tracks: 22,066 held out. Sheets from clip5 (2 of 36 looked at) show
   real embers, no texture, but some long tracks change streak angle between crops,
   i.e. hop (finding 5). Precision on quiet footage still unmeasured: the eval stage's
