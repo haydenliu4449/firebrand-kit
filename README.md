@@ -396,6 +396,31 @@ to trust: by eye, trajectories at 0 are single smooth paths and those near 20 ju
 between streaks of a shower. For saltation statistics start from `n_hops > 0` and
 `crowding <= 2` (256 trajectories in the 10 clips on 2026-11-08). Positions are in pixels.
 
+### Tagging firebrands by hand
+
+`tag_tool.py` is a small window for drawing tight rotated rectangles round
+firebrands, one track per ember. It runs on your own computer (Cloud Shell has no
+screen) and needs only `pip install opencv-python numpy`:
+
+```bash
+gsutil cp gs://berkeley-fire-lab-firebrands/clips/clip5.mp4 .      # or download in the Cloud Console
+python3 tag_tool.py clip5.mp4               # -> clip5_manual.csv, saved after every change
+python3 tag_tool.py clip5.mp4 --heldout     # only frames no model trains on (a fair test set)
+```
+
+Drag a rough box round one ember: the tool fits the tightest rotated rectangle to
+it (the ember's half-brightness outline, blue channel). On a real ember in clip9
+the fitted box agreed with the model's detection to 0.5 px. Too faint to fit: the
+box is kept as drawn (dashed). `n` starts a new ember; clicking a box continues
+its ember on later frames; the previous frame's boxes show in grey. `m` switches
+to a motion view (the frame minus its neighbours), where faint moving embers
+stand out. `?` lists every key. A second box for the same ember on the same frame
+replaces the first, and running it again on the same video carries on.
+
+The CSV uses the kit's columns (`x, y, L, W, theta` in radians, `track_id`), so
+hand tags can be scored like model tags. Tag `--heldout` frames if they will ever
+be used to measure recall.
+
 ### Positions in metres
 
 `calib/left_front.json` turns pixels into metres on the ground (lens correction +

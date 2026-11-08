@@ -45,7 +45,7 @@ detection, tracking, negatives or training.
 ## Commands
 | what | command |
 |---|---|
-| unit tests (seconds, no torch) | `python3 tests/test_negatives.py && python3 tests/test_reallabels.py && python3 tests/test_detect.py && python3 tests/test_resting.py && python3 tests/test_tiles.py && python3 tests/test_track.py && python3 tests/test_trajectory.py && python3 tests/test_calibration.py` |
+| unit tests (seconds, no torch) | `python3 tests/test_negatives.py && python3 tests/test_reallabels.py && python3 tests/test_detect.py && python3 tests/test_resting.py && python3 tests/test_tiles.py && python3 tests/test_track.py && python3 tests/test_trajectory.py && python3 tests/test_calibration.py && python3 tests/test_tag_tool.py` |
 | tracker benchmark (~10 s) | `python3 tests/benchmark.py` (`--ablate` for ablations) |
 | submit a step | `bash scripts/04-submit_job.sh <smoke\|detect\|tiles\|train\|tag> [-- run_all.py args]` |
 | job state / logs | `bash scripts/06-jobs.sh [list\|running\|status JOB\|logs JOB\|log JOB N]` |
@@ -107,7 +107,8 @@ modules: `pip3 install --user opencv-python-headless scipy pandas`.
   sheets), `negatives`, `reallabels`, `resting`, `trajectory`, `calibration`
   (pixels -> metres, `calib/left_front.json`), `gcsio`
 - Local tools: `evaluate_tags.py`, `trajectories.py` (tracks -> trajectories on existing
-  tags, path views), `suggest_negatives.py`, `make_mask.py`,
+  tags, path views), `tag_tool.py` (hand tagging, runs on the user's laptop: rotated
+  boxes fitted to the ember, CSV in the kit's columns), `suggest_negatives.py`, `make_mask.py`,
   `run_pipeline.py` (one clip through detect/track, e.g. to check a mask)
 - `tests/`: unit tests, `benchmark.py`, `smoke_train.py` (the smoke job)
 - Legacy, don't use: `cloud/` (old Workbench VM scripts), `notebooks/`
