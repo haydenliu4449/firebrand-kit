@@ -417,6 +417,32 @@ them; `trajectories.py` runs it on existing tags; the tag stage writes it too
 - Not done: contacts in metres (paver homography), hop length and apex per hop, joining
   a hop across a gap of more than 2 frames, a calibrated crowding cut.
 
+**12. (2026-11-08) Pixels to metres: lens and ground plane from the pavers.**
+User: continue with metres; slab size unknown, "use a typical size" (60 x 120 cm,
+provisional). `firebrand/calibration.py` + `calib/left_front.json`; derivation in
+`calib/derivation/` (README there lists every hand decision).
+- Lens: one-parameter division model, centre fixed at the image centre, k = -0.446
+  (barrel). Plumb lines = 18 traced row joints: 0.81 px rms straight (6.78 px raw).
+  Not fitted on, but straight after: kerbs, street edge, door frame, trench drain.
+  A line-detector score over k failed first (flat in smoke); drain-edge traces hop.
+- Ground plane: homography from 7 row joints (y = 0.6 j) and 11 cross joints (both ends
+  same x): row joints within 1-4 mm; cross joints on a half-offset 1.2 m lattice to
+  0.6 cm rms (max 1.3 cm; coherence 0.999 -- the running bond is confirmed by the data).
+- NOT determined by the image: absolute size and the slab's aspect. Row spacing and
+  right angles are; any stretch along the rows fits equally. Both from the assumption.
+- Check against the street (outside the fit): kerb to kerb 5.2 m perpendicular
+  (6.0 m down a column). Kerbs come out straight and parallel on a top-down render,
+  so the plane holds in shape, but 5.2 m is narrow: slabs bigger than assumed, or the
+  street tilts away from the driveway plane, or both. Most contacts are on the street.
+- First fit was a mirror image (det of the image->ground Jacobian +1; a map needs -1
+  because image y points down). Fixed; test added. Distances were never affected.
+- Trajectories get contacts_m, hops_m (consecutive ground points: contacts, then the
+  resting ember), landed_x_m/y_m, ground_supported (all points over the driveway);
+  resting.csv gets x_m, y_m. 1,380 contacts, 169 over the driveway. 96 trajectories
+  with a measurable hop (two ground points); median hop ~0.7 m (provisional scale).
+- Next: one measured length (slab, or street width from an aerial view) fixes the
+  scale; a second camera or a known height would be needed for apex heights.
+
 ## Pipeline (as implemented in firebrand-kit)
 
 0. Decode with `ffmpeg -vsync 0`; audit for DVR-padded duplicate frames (a 0.5

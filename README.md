@@ -396,6 +396,25 @@ to trust: by eye, trajectories at 0 are single smooth paths and those near 20 ju
 between streaks of a shower. For saltation statistics start from `n_hops > 0` and
 `crowding <= 2` (256 trajectories in the 10 clips on 2026-11-08). Positions are in pixels.
 
+### Positions in metres
+
+`calib/left_front.json` turns pixels into metres on the ground (lens correction +
+ground plane, fitted on the driveway pavers; `firebrand/calibration.py`).
+`trajectories.py` uses it by default: `trajectories.csv` gains `contacts_m`, `hops_m`
+(distances between an ember's consecutive ground points: its contacts, then where it
+came to rest), `landed_x_m`/`landed_y_m` and `ground_supported` (1 = all over the
+driveway, 0 = some on the street, where the plane is extrapolated); `resting.csv`
+gains `x_m`, `y_m`.
+
+Only points on the ground have a position: a contact, a resting ember. An ember in
+flight has none from one camera.
+
+**The scale is provisional.** The slabs are assumed to be 60 x 120 cm; every distance
+scales with that. With it, the street measures 5.2 m kerb to kerb, which is narrow, so
+the real slabs may be bigger. Measure one slab (or the street width, e.g. in Google
+Earth), then set `slab_m` and rescale `H_undistorted_px_to_ground_m` in the calibration
+file (`calib/derivation/README.md`), and rerun `python3 trajectories.py`.
+
 `--set SECTION.KEY=VALUE` changes any setting in `firebrand/config.py` for one
 job, without rebuilding: `bash scripts/04-submit_job.sh tag -- --force --overlay
 --set track.max_gap=3`. It is logged at the top of the job's output.

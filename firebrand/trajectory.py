@@ -160,7 +160,41 @@ def crowding(tracks, traj_of, scale=1.0, radius_px=50.0):
     return {k: sums[k] / counts[k] for k in counts}
 
 
-def write_clip(out_dir, tracks, resting_rows, width, cfg: TrajConfig | None = None):
+def add_metres(rows, resting_rows, cal):
+    """Ground positions in metres, where they exist: a contact and a resting ember
+    lie ON the ground, so one camera gives their position exactly (given the
+    calibration); a point in flight does not. Adds to each trajectory row:
+      contacts_m       "frame:X,Y;..." in metres
+      hops_m           distances between consecutive ground points of the ember --
+                       its contacts, then where it came to rest -- "1.23;0.87"
+      landed_x_m, landed_y_m
+      ground_supported 1 if every ground point lies over the driveway the plane was
+                       fitted on, 0 if any is extrapolated (the street)."""
+    rest = {r["ember_id"]: r for r in (resting_rows or [])}
+    for r in rows:
+        pts, frames = [], []
+        for c in filter(None, str(r["contacts"]).split(";")):
+            f, xy = c.split(":")
+            x, y = map(float, xy.split(","))
+            pts.append((x, y))
+            frames.append(int(f))
+        land = rest.get(r["landed_resting_id"]) if r["landed_resting_id"] >= 0 else None
+        all_px = pts + ([(land["x"], land["y"])] if land is not None else [])
+        if not all_px:
+            r.update(contacts_m="", hops_m="", landed_x_m=np.nan, landed_y_m=np.nan,
+                     ground_supported=np.nan)
+            continue
+        g = cal.to_ground(np.array(all_px))
+        ok = cal.supported(np.array(all_px))
+        r["contacts_m"] = ";".join(f"{f}:{X:.3f},{Y:.3f}" for f, (X, Y) in zip(frames, g[:len(pts)]))
+        r["hops_m"] = ";".join(f"{np.hypot(*(b - a)):.3f}" for a, b in zip(g, g[1:]))
+        r["landed_x_m"], r["landed_y_m"] = (float(g[-1, 0]), float(g[-1, 1])) if land is not None \
+            else (np.nan, np.nan)
+        r["ground_supported"] = int(bool(ok.all()))
+    return rows
+
+
+def write_clip(out_dir, tracks, resting_rows, width, cfg: TrajConfig | None = None, cal=None):
     """Trajectories for one tagged clip: writes trajectories.csv and adds a
     trajectory_id column to detections.csv. Shared by the tag stage and by
     trajectories.py, so tags made either way carry the same thing. Returns rows."""
@@ -171,6 +205,8 @@ def write_clip(out_dir, tracks, resting_rows, width, cfg: TrajConfig | None = No
     crowd = crowding(tracks, traj_of, scale=width / 1920.0) if tracks else {}
     for r in rows:
         r["crowding"] = round(crowd.get(r["trajectory_id"], 0.0), 2)
+    if cal is not None and rows:
+        add_metres(rows, resting_rows, cal)
     pd.DataFrame(rows, columns=None if rows else ["trajectory_id"]) \
         .to_csv(out_dir / "trajectories.csv", index=False)
     det = out_dir / "detections.csv"

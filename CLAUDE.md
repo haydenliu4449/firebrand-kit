@@ -45,7 +45,7 @@ detection, tracking, negatives or training.
 ## Commands
 | what | command |
 |---|---|
-| unit tests (seconds, no torch) | `python3 tests/test_negatives.py && python3 tests/test_reallabels.py && python3 tests/test_detect.py && python3 tests/test_resting.py && python3 tests/test_tiles.py && python3 tests/test_track.py && python3 tests/test_trajectory.py` |
+| unit tests (seconds, no torch) | `python3 tests/test_negatives.py && python3 tests/test_reallabels.py && python3 tests/test_detect.py && python3 tests/test_resting.py && python3 tests/test_tiles.py && python3 tests/test_track.py && python3 tests/test_trajectory.py && python3 tests/test_calibration.py` |
 | tracker benchmark (~10 s) | `python3 tests/benchmark.py` (`--ablate` for ablations) |
 | submit a step | `bash scripts/04-submit_job.sh <smoke\|detect\|tiles\|train\|tag> [-- run_all.py args]` |
 | job state / logs | `bash scripts/06-jobs.sh [list\|running\|status JOB\|logs JOB\|log JOB N]` |
@@ -104,7 +104,8 @@ modules: `pip3 install --user opencv-python-headless scipy pandas`.
 - `batch_entry.py`: container entry on Batch; `scripts/`: 00 setup … 06 jobs
 - `firebrand/`: `frames` (decode, IR check), `detect`, `track`, `synth`,
   `dataset`, `model`, `train`, `infer`, `evaluate`, `review` (contact
-  sheets), `negatives`, `reallabels`, `resting`, `trajectory`, `gcsio`
+  sheets), `negatives`, `reallabels`, `resting`, `trajectory`, `calibration`
+  (pixels -> metres, `calib/left_front.json`), `gcsio`
 - Local tools: `evaluate_tags.py`, `trajectories.py` (tracks -> trajectories on existing
   tags, path views), `suggest_negatives.py`, `make_mask.py`,
   `run_pipeline.py` (one clip through detect/track, e.g. to check a mask)
@@ -121,9 +122,10 @@ modules: `pip3 install --user opencv-python-headless scipy pandas`.
   `runs/streak_20261107`.
 - Methodology + change log for the lab: https://claude.ai/artifact/J5UvGqMa53v3gg2M1zWioo
   (keep it in step with approach.md).
-- Next: contacts in metres (paver homography) → hop length, apex, restitution; faint
-  long streaks remain the main miss (a matched line filter did not work). L4 VMs can
-  be scarce: queueing is free, so wait.
+- Metres (finding 12): lens + ground plane from the pavers, scale PROVISIONAL (slabs
+  assumed 60 x 120 cm; street then 5.2 m wide, suspiciously narrow). Next: a measured
+  length from the user → rescale `calib/left_front.json` → rerun `trajectories.py`;
+  faint long streaks remain the main miss. L4 VMs can be scarce: queueing is free.
 - Negatives: 30-min firebrand-free video `D01_20250107230423` in `negclips/`
   (3 stretches, ~26 s) in `work/negatives.txt`.
 - Open: `--real-positives` retrain not reported; track identity in dense showers

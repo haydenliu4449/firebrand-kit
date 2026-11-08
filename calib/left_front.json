@@ -1,0 +1,80 @@
+{
+  "camera": "Left Front",
+  "image_size": [
+    3840,
+    2160
+  ],
+  "lens": {
+    "model": "division",
+    "k": -0.446,
+    "center": [
+      1920.0,
+      1080.0
+    ],
+    "r_norm": 2202.9071700822983,
+    "note": "undistorted u = c + (d - c) / (1 + k |d - c|^2 / r_norm^2), d = raw pixel"
+  },
+  "H_undistorted_px_to_ground_m": [
+    [
+      -0.015562972302568055,
+      -0.01623256328844015,
+      59.34559550805424
+    ],
+    [
+      -0.011133634914801023,
+      0.01223499181820964,
+      -6.813779735772523
+    ],
+    [
+      -0.0014030603869506985,
+      -0.004060494958231777,
+      1.0
+    ]
+  ],
+  "ground_frame": "metres on the ground seen from above, right-handed (a map, not a mirror image): x along the paver rows, y across them, increasing towards the street; origin at one slab corner. Fixed 2026-11-08: the first fit was mirrored.",
+  "slab_m": [
+    1.2,
+    0.6
+  ],
+  "slab_size_provisional": true,
+  "slab_note": "60 x 120 cm ASSUMED (user, 2026-11-08: \"use a typical size\"); x scales with the slab length, y with the width. Change both here and rerun.",
+  "fit": {
+    "row_joint_rms_m": [
+      0.0012,
+      0.0038,
+      0.0006,
+      0.0029,
+      0.0029,
+      0.0012,
+      0.0034
+    ],
+    "cross_joint_lattice_rms_m": 0.006,
+    "cross_joint_lattice_max_m": 0.013,
+    "lens_plumb_rms_px": 0.81,
+    "n_row_joints": 7,
+    "n_cross_joints": 11
+  },
+  "supported_region_undistorted_px": [
+    [
+      598.0,
+      852.0
+    ],
+    [
+      4748.0,
+      702.0
+    ],
+    [
+      4748.0,
+      2752.0
+    ],
+    [
+      1448.0,
+      2752.0
+    ],
+    [
+      748.0,
+      1752.0
+    ]
+  ],
+  "made": "2026-11-08, work/calib/ (scene median of clip9)"
+}

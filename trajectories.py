@@ -4,7 +4,8 @@
     python3 trajectories.py                         # every clip in work/tags
     python3 trajectories.py --clip clip5 --views 12 --clips work/recall_review/clips
 
-Reads work/tags/<clip>/detections.csv (+ resting.csv) and writes, per clip:
+Reads work/tags/<clip>/detections.csv (+ resting.csv) and writes, per clip (with
+--calib, default calib/left_front.json, also ground positions in metres):
     trajectories.csv          one row per trajectory: its tracks, hops, contacts, landing
     detections.csv            gains a trajectory_id column (the file is rewritten)
     paths/traj_<id>.jpg       (--views N) the N trajectories with most hops, drawn on the
@@ -25,6 +26,7 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from firebrand import detect as D, track as T, trajectory as TJ  # noqa: E402
+from firebrand.calibration import GroundCalibration  # noqa: E402
 from firebrand.reallabels import read_csv_or_empty  # noqa: E402
 
 
@@ -83,7 +85,8 @@ def run_clip(work, name, args):
     rest = rest.to_dict("records") if len(rest) else []
     tracks = tracks_from(df)
     width = float(json.load(open(d / "done.json"))["shape"][1]) if (d / "done.json").exists() else 3840.0
-    rows = TJ.write_clip(d, tracks, rest, width)
+    cal = GroundCalibration.load(args.calib) if args.calib and Path(args.calib).exists() else None
+    rows = TJ.write_clip(d, tracks, rest, width, cal=cal)
     if args.views:
         video = next((p for p in Path(args.clips).glob(name + ".*")), None)
         if video is not None:
@@ -95,6 +98,14 @@ def run_clip(work, name, args):
     n = len(rows)
     hop = sum(r["n_hops"] > 0 for r in rows)
     land = sum(r["landed_resting_id"] >= 0 for r in rows)
+    if cal is not None:
+        rp = d / "resting.csv"
+        rr = read_csv_or_empty(rp)
+        if len(rr):
+            g = cal.to_ground(rr[["x", "y"]].to_numpy(float))
+            rr["x_m"], rr["y_m"] = g[:, 0].round(3), g[:, 1].round(3)
+            rr["ground_supported"] = cal.supported(rr[["x", "y"]].to_numpy(float)).astype(int)
+            rr.to_csv(rp, index=False)
     print(f"  {name}: {len(tracks)} tracks -> {n} trajectories; {hop} with hops "
           f"({sum(r['n_hops'] for r in rows)} contacts); {land} end at a resting ember")
     return n
@@ -106,6 +117,8 @@ def main():
     ap.add_argument("--clip", action="append")
     ap.add_argument("--views", type=int, default=0)
     ap.add_argument("--clips", default="clips")
+    ap.add_argument("--calib", default="calib/left_front.json",
+                    help="ground calibration (pixels -> metres); '' to skip")
     args = ap.parse_args()
     work = Path(args.work)
     names = args.clip or sorted(p.name for p in (work / "tags").iterdir() if p.is_dir())
