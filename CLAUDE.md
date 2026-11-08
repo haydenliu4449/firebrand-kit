@@ -111,18 +111,19 @@ modules: `pip3 install --user opencv-python-headless scipy pandas`.
 - `tests/`: unit tests, `benchmark.py`, `smoke_train.py` (the smoke job)
 - Legacy, don't use: `cloud/` (old Workbench VM scripts), `notebooks/`
 
-## Last known state (2026-11-07)
-- Current tags (`work/tags`, bucket `work/tags`): retrained model, mask
-  `left_front_v3.json`. Held-out recall 0.434 (0.499 without canopy tracks), and 5x
-  fewer false tracks on empty footage than the 10-23 model (finding 9): keep it.
-  Earlier tags: `work/tags_20261106`, `work/tags_before_20261023`; bucket
-  `work/tags_20261106`. Models: bucket `runs/streak_20261023`, `runs/streak_20261107`.
-- Tracker changes (finding 10) are in tag job fb-tag-20261107-222905 (image built
-  before trajectories). Trajectories (finding 11) committed: run `python3
-  trajectories.py` on the new tags. Methodology + change log for the lab:
-  https://claude.ai/artifact/J5UvGqMa53v3gg2M1zWioo (keep it in step with approach.md).
-- Faint long streaks remain the main miss; a matched line filter did not work.
-  L4 VMs can be scarce: queueing is free, so wait.
+## Last known state (2026-11-08)
+- Current tags (`work/tags`, bucket `work/tags`): 11-07 model, mask
+  `left_front_v3.json`, tag tracker of finding 10 (job fb-tag-20261107-222905), with
+  trajectories made locally by `trajectories.py` (finding 11). Box coverage of
+  verified held-out tracks 66.3%; 1,352 hop trajectories, 256 with crowding <= 2.
+  Earlier tags: `work/tags_20261107`, `work/tags_20261106`, `work/tags_before_20261023`
+  (bucket: tags_20261107, tags_20261106). Models: bucket `runs/streak_20261023`,
+  `runs/streak_20261107`.
+- Methodology + change log for the lab: https://claude.ai/artifact/J5UvGqMa53v3gg2M1zWioo
+  (keep it in step with approach.md).
+- Next: contacts in metres (paver homography) → hop length, apex, restitution; faint
+  long streaks remain the main miss (a matched line filter did not work). L4 VMs can
+  be scarce: queueing is free, so wait.
 - Negatives: 30-min firebrand-free video `D01_20250107230423` in `negclips/`
   (3 stretches, ~26 s) in `work/negatives.txt`.
 - Open: `--real-positives` retrain not reported; track identity in dense showers

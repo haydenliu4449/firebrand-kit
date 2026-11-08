@@ -390,8 +390,11 @@ python3 trajectories.py --views 12 --clips clips/
 ```
 
 Look at the path views before trusting a trajectory from a dense shower: in synthetic
-showers about 6% of trajectories mix two embers (4% of tracks already do).
-Positions are in pixels.
+showers about 6% of trajectories mix two embers (4% of tracks already do). The
+`crowding` column (other embers within 50 px, at 1920 wide, per frame) says which
+to trust: by eye, trajectories at 0 are single smooth paths and those near 20 jump
+between streaks of a shower. For saltation statistics start from `n_hops > 0` and
+`crowding <= 2` (256 trajectories in the 10 clips on 2026-11-08). Positions are in pixels.
 
 `--set SECTION.KEY=VALUE` changes any setting in `firebrand/config.py` for one
 job, without rebuilding: `bash scripts/04-submit_job.sh tag -- --force --overlay

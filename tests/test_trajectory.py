@@ -61,6 +61,17 @@ def test_landing_on_a_resting_ember():
     assert rows[0]["landed_resting_id"] == -1                             # too late
 
 
+def test_crowding_counts_other_trajectories_only():
+    a, b = track(0, FALL, 0), track(1, RISE, 4)              # one trajectory
+    far = track(2, [(900, 900), (910, 910), (920, 920)], 0)
+    near = track(3, [(105, 102), (115, 122), (125, 142)], 0)    # beside the fall, frames 0-2
+    rows, tof = TJ.build([a, b, far, near])
+    cr = TJ.crowding([a, b, far, near], tof)
+    assert cr[tof[2]] == 0.0                                  # alone
+    assert cr[tof[0]] > 0 and cr[tof[3]] > 0                  # each sees the other
+    assert tof[0] == tof[1] and cr[tof[0]] < 1.0              # its own hop is not a neighbour
+
+
 if __name__ == "__main__":
     for k, v in list(globals().items()):
         if k.startswith("test_"):

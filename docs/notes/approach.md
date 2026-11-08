@@ -401,9 +401,21 @@ them; `trajectories.py` runs it on existing tags; the tag stage writes it too
   frames, boxes, contacts) in work/tags/<clip>/paths/ with --views N.
 - Real tags (11-07 model, previous tracker): clip5 58 trajectories with hops (59
   contacts), 76 ending at a resting ember; clip2 315 (329), 168; clip9 35 (37), 2.
+- **Tag job with the new tracker** (fb-tag-20261107-222905, 1.96 h): 50,854 tracks (was
+  82,964). Box coverage of verified held-out tracks (no canopy) 61.7% -> 66.3%,
+  detections 56.6% -> 60.5%, confirming finding 10 (+5.4 on held-out blocks). Centre
+  recall falls (0.434 -> 0.382 at 5 px) because merged boxes centre on the whole streak.
+- On those tags: 49,474 trajectories, 1,352 with a hop (1,380 contacts), 1,173 ending
+  at a resting ember.
+- **Crowding** (`trajectory.crowding`, a column of trajectories.csv): mean number of
+  other trajectories' detections within 50 px (at 1920 wide) per frame. Path views of
+  clip7 hop trajectories: the 3 least crowded (0.0) are each one smooth ember path;
+  the 3 most crowded (18-21) jump between streaks of a shower. Synthetic scenes are too
+  sparse to calibrate it (none above 2; mixing 5% even at 0), so it is a descriptive
+  filter, not a validated one. Hop trajectories with crowding <= 2: 256; <= 5: 617.
+  Use those for saltation statistics until identity in showers is solved.
 - Not done: contacts in metres (paver homography), hop length and apex per hop, joining
-  a hop across a gap of more than 2 frames, and a check of real hops by eye beyond a
-  handful of path views.
+  a hop across a gap of more than 2 frames, a calibrated crowding cut.
 
 ## Pipeline (as implemented in firebrand-kit)
 

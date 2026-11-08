@@ -137,6 +137,29 @@ def build(tracks, resting=None, cfg: TrajConfig | None = None, scale=1.0):
     return rows, traj_of
 
 
+def crowding(tracks, traj_of, scale=1.0, radius_px=50.0):
+    """{trajectory id: mean number of OTHER trajectories' detections within radius_px
+    (at 1920 wide) of it, per frame it is seen}. A trajectory in a dense shower can
+    hop between neighbours and nothing in its shape shows it (approach.md finding 5):
+    this says which ones to trust."""
+    from scipy.spatial import cKDTree
+    by_frame = {}
+    for t in tracks:
+        for d in t.dets:
+            by_frame.setdefault(d.frame, []).append((d.x, d.y, traj_of[t.id]))
+    sums, counts = {}, {}
+    r = radius_px * scale
+    for f, pts in by_frame.items():
+        xy = np.array([(x, y) for x, y, _ in pts])
+        owner = np.array([k for _, _, k in pts])
+        near = cKDTree(xy).query_ball_point(xy, r)
+        for i, idx in enumerate(near):
+            k = int(owner[i])
+            sums[k] = sums.get(k, 0) + int(np.sum(owner[idx] != k))
+            counts[k] = counts.get(k, 0) + 1
+    return {k: sums[k] / counts[k] for k in counts}
+
+
 def write_clip(out_dir, tracks, resting_rows, width, cfg: TrajConfig | None = None):
     """Trajectories for one tagged clip: writes trajectories.csv and adds a
     trajectory_id column to detections.csv. Shared by the tag stage and by
@@ -145,6 +168,9 @@ def write_clip(out_dir, tracks, resting_rows, width, cfg: TrajConfig | None = No
     from pathlib import Path
     out_dir = Path(out_dir)
     rows, traj_of = build(tracks, resting_rows, cfg, scale=width / 1920.0)
+    crowd = crowding(tracks, traj_of, scale=width / 1920.0) if tracks else {}
+    for r in rows:
+        r["crowding"] = round(crowd.get(r["trajectory_id"], 0.0), 2)
     pd.DataFrame(rows, columns=None if rows else ["trajectory_id"]) \
         .to_csv(out_dir / "trajectories.csv", index=False)
     det = out_dir / "detections.csv"
