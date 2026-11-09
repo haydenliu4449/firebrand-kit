@@ -186,6 +186,16 @@ class Frames:
 # the window
 # ---------------------------------------------------------------------------
 
+def wheel_delta(flags):
+    """Mouse-wheel step from an OpenCV mouse callback's flags: > 0 up, < 0 down.
+
+    The C++ helper cv::getMouseWheelDelta is missing from most Python builds of
+    OpenCV; the step is the signed high 16 bits of flags (e.g. +/-120 per notch).
+    """
+    d = (int(flags) >> 16) & 0xFFFF
+    return d - 0x10000 if d & 0x8000 else d
+
+
 class Tagger:
     VIEWS = ("normal", "enhanced", "motion")
     COLS = [(0, 255, 0), (255, 200, 0), (0, 200, 255), (255, 0, 255), (0, 255, 255),
@@ -362,7 +372,9 @@ class Tagger:
                 save(self.out, self.boxes)
                 self.msg = f"deleted ember {r['track_id']} on frame {r['frame']}"
         elif ev == cv2.EVENT_MOUSEWHEEL:
-            self.zoom_at(sx, sy, 1.25 if cv2.getMouseWheelDelta(flags) > 0 else 0.8)
+            d = wheel_delta(flags)
+            if d:
+                self.zoom_at(sx, sy, 1.25 if d > 0 else 0.8)
 
     def key(self, k):
         c = chr(k) if 0 <= k < 256 else ""

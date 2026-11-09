@@ -64,6 +64,15 @@ def test_heldout_matches_the_kit():
             assert TT.is_heldout(name, f) == is_heldout(name, f), (name, f)
 
 
+def test_wheel_delta():
+    # the step sits in the signed high 16 bits of flags; low bits are buttons/keys
+    assert TT.wheel_delta(120 << 16) == 120
+    assert TT.wheel_delta((120 << 16) | cv2.EVENT_FLAG_CTRLKEY) == 120
+    assert TT.wheel_delta(-120 << 16) == -120                  # a negative Python int
+    assert TT.wheel_delta((-120 << 16) & 0xFFFFFFFF) == -120   # or the same as unsigned 32-bit
+    assert TT.wheel_delta(0) == 0
+
+
 def _session(tmp, **kw):
     clip = ROOT / "work" / "recall_review" / "clips" / "clip9.mp4"
     if not clip.exists():
