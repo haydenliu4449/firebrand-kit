@@ -467,9 +467,16 @@ GPU); `--overlay-paths` on a detect or tag job draws it into that job's overlay.
   The whole unit suite and `tests/benchmark.py` (mirrored row = shipped defaults) pass
   with this change on Windows (Python 3.14) and in Cloud Shell (Python 3.12, in a
   scratch copy under `/tmp`).
-- NOT checked: a tag job with `--overlay-paths` on Batch (needs an image rebuild), and
-  the model's tags from the bucket (trajectories on real tags). By track only so far
-  on real footage.
+  On the model's tags (clip5 from the bucket, the 11-07 tag job; trajectories made
+  locally: 2,263 tracks -> 2,224 trajectories, 38 with hops): the whole clip at half
+  size in 30 s. Kept to the end of the clip, the paths bury the dense shower by
+  mid-clip: use `--linger` or `--frames` there. Some long arcs change colour part-way:
+  that ember's track is in pieces, which is the tracking still to be finished.
+  The Windows PC's OpenCV decodes 210 of clip5's 212 frames. The tags still line up
+  (blue at the tag centres is 102 on the tag's own frame, 37-48 one to three frames
+  either side), so it is the last two frames that are missing there.
+- NOT checked: a tag job with `--overlay-paths` on Batch (needs an image rebuild). From
+  the model's tags only clip5 has been drawn.
 - Seen on that clip: many paths in the shower zigzag between neighbouring streaks.
   That is finding 5 (tracks hopping), now visible directly, which contact sheets
   could not show. So this is also the path view finding 5 asked for, as a video.
