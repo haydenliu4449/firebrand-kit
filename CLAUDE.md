@@ -45,7 +45,7 @@ detection, tracking, negatives or training.
 ## Commands
 | what | command |
 |---|---|
-| unit tests (seconds, no torch) | `python3 tests/test_negatives.py && python3 tests/test_reallabels.py && python3 tests/test_detect.py && python3 tests/test_resting.py && python3 tests/test_tiles.py && python3 tests/test_track.py && python3 tests/test_trajectory.py && python3 tests/test_calibration.py && python3 tests/test_tag_tool.py` |
+| unit tests (seconds, no torch) | `python3 tests/test_negatives.py && python3 tests/test_reallabels.py && python3 tests/test_detect.py && python3 tests/test_resting.py && python3 tests/test_tiles.py && python3 tests/test_track.py && python3 tests/test_trajectory.py && python3 tests/test_calibration.py && python3 tests/test_tag_tool.py && python3 tests/test_pathoverlay.py` |
 | tracker benchmark (~10 s) | `python3 tests/benchmark.py` (`--ablate` for ablations) |
 | submit a step | `bash scripts/04-submit_job.sh <smoke\|detect\|tiles\|train\|tag> [-- run_all.py args]` |
 | job state / logs | `bash scripts/06-jobs.sh [list\|running\|status JOB\|logs JOB\|log JOB N]` |
@@ -105,9 +105,11 @@ modules: `pip3 install --user opencv-python-headless scipy pandas`.
 - `firebrand/`: `frames` (decode, IR check), `detect`, `track`, `synth`,
   `dataset`, `model`, `train`, `infer`, `evaluate`, `review` (contact
   sheets), `negatives`, `reallabels`, `resting`, `trajectory`, `calibration`
-  (pixels -> metres, `calib/left_front.json`), `gcsio`
+  (pixels -> metres, `calib/left_front.json`), `pathoverlay` (whole paths drawn on
+  the video), `gcsio`
 - Local tools: `evaluate_tags.py`, `trajectories.py` (tracks -> trajectories on existing
-  tags, path views), `tag_tool.py` (hand tagging, runs on the user's laptop: rotated
+  tags, path views), `path_overlay.py` (overlay video with every firebrand's whole path,
+  from existing tags; `--overlay-paths` is the same on a detect/tag job), `tag_tool.py` (hand tagging, runs on the user's laptop: rotated
   boxes fitted to the ember, CSV in the kit's columns), `suggest_negatives.py`, `make_mask.py`,
   `run_pipeline.py` (one clip through detect/track, e.g. to check a mask)
 - `tests/`: unit tests, `benchmark.py`, `smoke_train.py` (the smoke job)
@@ -127,6 +129,9 @@ modules: `pip3 install --user opencv-python-headless scipy pandas`.
   assumed 60 x 120 cm; street then 5.2 m wide, suspiciously narrow). Next: a measured
   length from the user → rescale `calib/left_front.json` → rerun `trajectories.py`;
   faint long streaks remain the main miss. L4 VMs can be scarce: queueing is free.
+- 2026-11-15: whole-path overlay added (finding 13). `path_overlay.py` works on existing
+  tags with no job; the image was NOT rebuilt, so jobs do not know `--overlay-paths`
+  yet. Tracking is unfinished by the user's plan: the overlay draws whatever IDs exist.
 - Negatives: 30-min firebrand-free video `D01_20250107230423` in `negclips/`
   (3 stretches, ~26 s) in `work/negatives.txt`.
 - Open: `--real-positives` retrain not reported; track identity in dense showers

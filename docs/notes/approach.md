@@ -443,6 +443,37 @@ provisional). `firebrand/calibration.py` + `calib/left_front.json`; derivation i
 - Next: one measured length (slab, or street width from an aerial view) fixes the
   scale; a second camera or a known height would be needed for apex heights.
 
+**13. (2026-11-15) Whole paths on the overlay video.**
+User: once a firebrand is tagged and has an ID, its earlier positions should stay on
+screen and be joined into one continuous line, over the whole clip. (Tracking itself
+is to be finished later; this draws whatever IDs the tags carry.)
+`firebrand/pathoverlay.py`; `path_overlay.py` renders it from tags already made (no
+GPU); `--overlay-paths` on a detect or tag job draws it into that job's overlay.mp4.
+- One ember = one trajectory_id where the tags have them (the line runs on through
+  each bounce), else one track_id. Line through the detection centres in frame order,
+  a dot per frame, 12 repeating colours, the ID beside the box.
+- A position joins the line one frame later: on the frame an ember is detected in,
+  its line stops at the edge of its box, so the overlay still never covers the
+  firebrand in view (finding 6's rule).
+- Paths stay to the end of the clip by default; `--linger N` removes a path N frames
+  after its ember was last seen. Default paths are kept on one layer that is only
+  added to, so the cost per frame does not grow with the number of finished paths.
+- Checked: tests/test_pathoverlay.py (12 checks, no footage: the frame-1 position is
+  there on frame 2 and joined, a bounce is one path, linger, part of a clip, the tool
+  end to end, and run_all's tag overlay writer with a stand-in for the model's
+  tracks). On real footage, classical detect on clip5 frames 0-59 (1,374 tracks,
+  6,634 positions, 4K): the tool's video is identical to the detect stage's with
+  `--overlay-paths`; 60 frames in 10 s on a laptop; 12 MB for those 2.5 s.
+  The whole unit suite and `tests/benchmark.py` (mirrored row = shipped defaults) pass
+  with this change on Windows (Python 3.14) and in Cloud Shell (Python 3.12, in a
+  scratch copy under `/tmp`).
+- NOT checked: a tag job with `--overlay-paths` on Batch (needs an image rebuild), and
+  the model's tags from the bucket (trajectories on real tags). By track only so far
+  on real footage.
+- Seen on that clip: many paths in the shower zigzag between neighbouring streaks.
+  That is finding 5 (tracks hopping), now visible directly, which contact sheets
+  could not show. So this is also the path view finding 5 asked for, as a video.
+
 ## Pipeline (as implemented in firebrand-kit)
 
 0. Decode with `ffmpeg -vsync 0`; audit for DVR-padded duplicate frames (a 0.5

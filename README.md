@@ -213,7 +213,8 @@ row per detection: position, streak length and angle, brightness), `labels/`
 and `labels_obb/` (YOLO boxes, see below), `candidates.csv` (model detections
 that did not make it into a track) and, if the job ran with `-- --overlay`,
 `overlay.mp4`: green boxes are tagged firebrands, thin yellow boxes are
-detections the tracker dropped.
+detections the tracker dropped. To see each firebrand's whole path rather than
+one box per frame, see "Whole paths on the video" below.
 
 **The boxes follow the streak.** Each detection is a rotated rectangle fitted to
 the streak's pixels (`cv2.minAreaRect`): centre `x, y`, length `L` along the
@@ -395,6 +396,45 @@ showers about 6% of trajectories mix two embers (4% of tracks already do). The
 to trust: by eye, trajectories at 0 are single smooth paths and those near 20 jump
 between streaks of a shower. For saltation statistics start from `n_hops > 0` and
 `crowding <= 2` (256 trajectories in the 10 clips on 2026-11-08). Positions are in pixels.
+
+### Whole paths on the video
+
+The overlay boxes a firebrand only on the frames it is seen in, so its path has to
+be followed by eye from one box to the next. `path_overlay.py` writes a video in
+which every position stays: once a firebrand has an ID, each place it was tagged
+at remains on screen, joined in frame order into one line in its own colour, with
+a dot per frame (wide spacing = fast) and its ID beside the box. On frame 2 the
+frame-1 position is still there, joined to the new one; by the end of the clip
+every path is drawn whole.
+
+```bash
+bash scripts/05-gcs_sync.sh tags                    # the tags: CSVs, small
+python3 path_overlay.py --clip clip5 --scale 0.5    # -> work/tags/clip5/overlay_paths.mp4 + .jpg
+python3 path_overlay.py                             # every tagged clip
+```
+
+It runs on tags already made: no GPU and no job. `overlay_paths.jpg` is the last
+frame with every path whole, the quickest thing to look at (in Cloud Shell, open it
+in the editor). A clip that already has its video is skipped; `--force` redoes it.
+
+| option | what it does |
+|---|---|
+| `--by track` / `--by trajectory` | what counts as one firebrand. Default: its trajectory where the tags have them (one ember across its bounces, so the line runs on through each contact), else its track |
+| `--linger N` | a path leaves N frames after its ember was last seen. Default: paths stay to the end of the clip, which fills the frame in a dense shower |
+| `--frames 96-240` | only that part of the clip (paths from before it are already drawn) |
+| `--scale 0.5` | a 1080p video from a 4K clip. A 4K one is large, and Cloud Shell's disk is 5 GB |
+| `--no-ids` | no ID numbers |
+| `--csv FILE --video FILE` | any table in the kit's columns: hand tags (`clips/clip5_manual.csv`) or the classical tracks (`work/clips/clip5/detections.csv`); writes `<name>_paths.mp4` beside the CSV |
+
+On a job, `--overlay-paths` after the `--` of a detect or tag step draws the same
+paths into that job's `overlay.mp4`, beside the boxes. It is a code change, so
+the image must be rebuilt before a job knows the flag.
+
+Two things about reading it. The line never covers the firebrand in view: on the
+frame an ember is detected in, its line stops at the edge of its box, and reaches
+that position one frame later. And a path is the tracker's claim, drawn: where a
+track hops between two embers of a shower (see "If the tags miss firebrands"), the
+line zigzags from one streak to the other. Contact sheets cannot show that; this can.
 
 ### Tagging firebrands by hand
 
@@ -1121,7 +1161,9 @@ firebrand/
   evaluate.py   distance matching, track metrics, detectability filtering
   negatives.py  firebrand-free footage: negatives.txt, sampling, held-out split, check
   reallabels.py real firebrands as labels: verified tracks + reviewed tags
+  pathoverlay.py every firebrand's whole path, drawn on the video
 make_mask.py     click-to-draw exclusion mask editor
+path_overlay.py  overlay video with whole paths, from tags already made
 run_pipeline.py  CLI for stages 1-3, one clip
 run_all.py       every stage, resumable, shardable -- what Batch jobs run
 batch_entry.py   container entrypoint: bucket paths, logs, hardware record
@@ -1131,6 +1173,7 @@ tests/benchmark.py   end-to-end benchmark and ablation
 tests/smoke_train.py torch path check, including resume (the `smoke` step)
 tests/test_negatives.py  sampling of firebrand-free footage (seconds, no video)
 tests/test_reallabels.py training on real firebrands (seconds, no video)
+tests/test_pathoverlay.py whole-path overlay (seconds, no footage)
 
 Cloud Batch (the lab's gcp-example workflow)
 .env.example             project, bucket, region, machines (copy to .env)

@@ -59,6 +59,7 @@ from firebrand import Config, frames as F, detect as D, track as T, review as R
 from firebrand.config import SynthConfig
 from firebrand import synth as S, dataset as DS, evaluate as E, gcsio
 from firebrand import negatives as NG, reallabels as RL, resting as RS, trajectory as TJ
+from firebrand import pathoverlay as PO
 
 VIDEO_EXTS = {".mp4", ".avi", ".mov", ".mkv", ".m4v"}
 
@@ -313,11 +314,13 @@ def stage_detect(args, cfg):
             for tr in acc:
                 for d in tr.dets:
                     by.setdefault(d.frame, []).append(d)
-            vw = None
+            vw = paths = None
             if args.overlay:
                 vw = cv2.VideoWriter(str(out / "overlay.mp4"),
                                      cv2.VideoWriter_fourcc(*"mp4v"),
                                      c.track.fps, (W, H))
+                if args.overlay_paths:      # each track's whole path stays on screen
+                    paths = PO.PathOverlay(PO.from_tracks(acc), (H, W))
             mid = n_frames // 2
             for i, f in enumerate(stream()):
                 if i < 12:
@@ -326,7 +329,7 @@ def stage_detect(args, cfg):
                     cv2.imwrite(str(out / "fp_heatmap.png"),
                                 R.fp_heatmap(rej, acc, f))
                 if vw is not None:
-                    vw.write(D.draw(f, by.get(i, [])))
+                    vw.write(D.draw(paths.draw(f, i) if paths else f, by.get(i, [])))
             if vw is not None:
                 vw.release()
 
@@ -992,6 +995,37 @@ def scene_reference(args, work):
     return scene
 
 
+def write_tag_overlay(path, frames, fps, shape, acc, cand, rest, traj=None):
+    """The tag stage's overlay.mp4: green boxes = tagged firebrands, thin yellow =
+    detections the tracker dropped, cyan circles = resting embers.
+
+    `traj` (the trajectory rows of the clip, --overlay-paths) adds every ember's
+    whole path: its positions so far joined into one line that stays on screen,
+    one ember = one trajectory (firebrand/pathoverlay.py)."""
+    H, W = shape
+    by, cby = {}, {}
+    for tr in acc:
+        for d in tr.dets:
+            by.setdefault(d.frame, []).append(d)
+    for d in cand:
+        cby.setdefault(d.frame, []).append(d)
+    paths = None
+    if traj is not None:
+        ember = {int(t): r["trajectory_id"] for r in traj for t in str(r["track_ids"]).split()}
+        paths = PO.PathOverlay(PO.from_tracks(acc, ember), (H, W))
+    vw = cv2.VideoWriter(str(path), cv2.VideoWriter_fourcc(*"mp4v"), fps, (W, H))
+    for i, f in enumerate(frames):
+        if paths is not None:
+            f = paths.draw(f, i)
+        f = D.draw(f, cby.get(i, []), color=(0, 220, 255), thickness=1)   # yellow
+        f = D.draw(f, by.get(i, []))                                      # green
+        for e in rest:                                                    # cyan
+            if e["frame_start"] <= i <= e["frame_end"]:
+                cv2.circle(f, (int(e["x"]), int(e["y"])), 12, (255, 255, 0), 2)
+        vw.write(f)
+    vw.release()
+
+
 def stage_tag(args, cfg):
     """Run the trained model over every real clip and write the firebrands it
     finds, in the same formats the classical detector writes.
@@ -1001,7 +1035,8 @@ def stage_tag(args, cfg):
         detections.csv   one row per detection, with track_id
         labels/*.txt     YOLO boxes (upright), one file per frame that has any
         labels_obb/*.txt YOLO OBB boxes: the rotated box that follows the streak
-        overlay.mp4      (with --overlay) detections drawn on the clip
+        overlay.mp4      (with --overlay) detections drawn on the clip; with
+                         --overlay-paths every firebrand's whole path stays on it
         done.json        counts, threshold, and the classical count to compare
 
     The acceptance rule still applies to the model's output: even a good model
@@ -1130,22 +1165,8 @@ def stage_tag(args, cfg):
         traj = TJ.write_clip(out, acc, rest, W)
 
         if args.overlay:
-            by, cby = {}, {}
-            for tr in acc:
-                for d in tr.dets:
-                    by.setdefault(d.frame, []).append(d)
-            for d in cand:
-                cby.setdefault(d.frame, []).append(d)
-            vw = cv2.VideoWriter(str(out / "overlay.mp4"),
-                                 cv2.VideoWriter_fourcc(*"mp4v"), c.track.fps, (W, H))
-            for i, f in enumerate(stream()):
-                f = D.draw(f, cby.get(i, []), color=(0, 220, 255), thickness=1)   # yellow
-                f = D.draw(f, by.get(i, []))                                      # green
-                for e in rest:                                                    # cyan
-                    if e["frame_start"] <= i <= e["frame_end"]:
-                        cv2.circle(f, (int(e["x"]), int(e["y"])), 12, (255, 255, 0), 2)
-                vw.write(f)
-            vw.release()
+            write_tag_overlay(out / "overlay.mp4", stream(), c.track.fps, (H, W), acc, cand,
+                              rest, traj if args.overlay_paths else None)
 
         classical = None
         det_done = work / "clips" / name / "done.json"
@@ -1235,6 +1256,10 @@ def main(argv=None):
     ap.add_argument("--threshold", type=float, default=None,
                     help="tag: model probability threshold (default: from eval)")
     ap.add_argument("--overlay", action="store_true")
+    ap.add_argument("--overlay-paths", action="store_true",
+                    help="detect/tag: write overlay.mp4 with every firebrand's whole path "
+                         "kept on screen -- its positions so far joined into one line "
+                         "(implies --overlay)")
     ap.add_argument("--neg-frac", type=float, default=0.25,
                     help="tiles: share of training tiles taken from firebrand-free "
                          "frames listed in <work>/negatives.txt")
@@ -1282,6 +1307,7 @@ def main(argv=None):
                          "--set track.max_heading_change_deg=40 (repeatable)")
     args = ap.parse_args(argv)
     args.shard = parse_shard(args.shard)
+    args.overlay = args.overlay or args.overlay_paths
 
     Path(args.work).mkdir(parents=True, exist_ok=True)
     # Detection and tracking settings come from the code (plus --set), NOT from
