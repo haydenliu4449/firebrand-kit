@@ -115,14 +115,30 @@ modules: `pip3 install --user opencv-python-headless scipy pandas`.
 - `tests/`: unit tests, `benchmark.py`, `smoke_train.py` (the smoke job)
 - Legacy, don't use: `cloud/` (old Workbench VM scripts), `notebooks/`
 
-## Last known state (2026-11-08)
-- Current tags (`work/tags`, bucket `work/tags`): 11-07 model, mask
-  `left_front_v3.json`, tag tracker of finding 10 (job fb-tag-20261107-222905), with
-  trajectories made locally by `trajectories.py` (finding 11). Box coverage of
-  verified held-out tracks 66.3%; 1,352 hop trajectories, 256 with crowding <= 2.
+## Last known state (2026-11-20)
+- Current tags (bucket `work/tags`): the **11-07 model** set, threshold 0.8, job
+  fb-tag-20261107-222905, mask `left_front_v3.json`, tag tracker of finding 10, with
+  trajectories made locally by `trajectories.py` (finding 11). Box coverage of verified
+  held-out tracks 66.3%; 1,352 hop trajectories, 256 with crowding <= 2. 10,311 objects.
+  These were RESTORED on 2026-11-20 from `work/tags_20261120` after the 11-20 retrain's
+  tags scored worse at a 5 px match (0.382 -> 0.355), level at 15 px (0.582 -> 0.592) and
+  13% more numerous (finding 15).
+- The 11-20 retrain's tags are archived at bucket `work/tags_retrain_20261120` (10,313
+  objects, threshold 0.6, with the job's own trajectories and whole-path overlays). They
+  are the evidence behind finding 15; don't use them for science.
+  `work/tags_20261120` is the identical copy of the restored good set.
   Earlier tags: `work/tags_20261107`, `work/tags_20261106`, `work/tags_before_20261023`
-  (bucket: tags_20261107, tags_20261106). Models: bucket `runs/streak_20261023`,
-  `runs/streak_20261107`.
+  (bucket: tags_20261107, tags_20261106). Models: bucket `runs/streak` (11-20),
+  `runs/streak_20261107`, `runs/streak_20261023`.
+- **A tag set's `done.json` does not identify its model**: it records the path
+  `runs/streak/best.pt`, which `--force` overwrites each retrain. The restored 11-07 tags
+  therefore claim `runs/streak/best.pt` too. Right now only `threshold` tells them apart
+  (0.8 = 11-07 model, 0.6 = 11-20). Worth writing the model's digest or run name instead.
+- Locally (Windows checkout, git-ignored): `work/tags_retrain_20261120/` = the 11-20
+  tags' CSVs, `work/baseline/` = the restored 11-07 tags scored against the same classical
+  CSVs, `work/eval*/summary*.csv` = both scorings, `work/clips/*/` = classical
+  detections + the hand `reject.txt` files. There is deliberately no local `work/tags`.
+  Only CSVs were pulled, not contact sheets or overlay videos.
 - Methodology + change log for the lab: https://claude.ai/artifact/J5UvGqMa53v3gg2M1zWioo
   (keep it in step with approach.md).
 - Metres (finding 12): lens + ground plane from the pavers, scale PROVISIONAL (slabs
@@ -130,11 +146,23 @@ modules: `pip3 install --user opencv-python-headless scipy pandas`.
   length from the user → rescale `calib/left_front.json` → rerun `trajectories.py`;
   faint long streaks remain the main miss. L4 VMs can be scarce: queueing is free.
 - 2026-11-15: whole-path overlay added (finding 13). `path_overlay.py` works on existing
-  tags with no job; the image was NOT rebuilt, so jobs do not know `--overlay-paths`
-  yet. Tracking is unfinished by the user's plan: the overlay draws whatever IDs exist.
+  tags with no job. Tracking is unfinished by the user's plan: the overlay draws whatever
+  IDs exist.
+- 2026-11-20: image REBUILT (digest 469a1e19); `--overlay-paths` verified on a real job
+  (finding 13), and it writes into `overlay.mp4`, not a separate file.
+  `--real-positives` retrain done (finding 14): on synthetic + empty frames it looked
+  much better (false tracks per 100 empty frames 16.88 -> 4.55, recall unchanged,
+  threshold 0.6). On real footage its tags scored worse at a 5 px match and no better at
+  15 px, and were rolled back the same day (finding 15). **Do not trust the synthetic or
+  empty-frame eval for field recall; score tags with `evaluate_tags.py` against verified
+  tracks before shipping a model.**
 - Negatives: 30-min firebrand-free video `D01_20250107230423` in `negclips/`
   (3 stretches, ~26 s) in `work/negatives.txt`.
-- Open: `--real-positives` retrain not reported; track identity in dense showers
+- Open: whether the 11-20 result is the model or the threshold (needs one tag job at the
+  other threshold, ~2 h ~$1.50; the per-detection score is in no CSV, so it cannot be
+  re-thresholded offline — writing it would make this free); no box-coverage figure
+  exists for the 11-20 tags, and no tool in the repo computes one; track identity in
+  dense showers
   (finding 5); chance alignments in dense showers, up to ~10-15% of clip5's
   tracks (finding 9); joining descent+ascent pieces per hop; exposure time, true
   capture rate, IR switching.

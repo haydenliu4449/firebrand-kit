@@ -475,11 +475,81 @@ GPU); `--overlay-paths` on a detect or tag job draws it into that job's overlay.
   The Windows PC's OpenCV decodes 210 of clip5's 212 frames. The tags still line up
   (blue at the tag centres is 102 on the tag's own frame, 37-48 one to three frames
   either side), so it is the last two frames that are missing there.
-- NOT checked: a tag job with `--overlay-paths` on Batch (needs an image rebuild). From
-  the model's tags only clip5 has been drawn.
+- CHECKED 2026-11-20 (job fb-tag-20261120-153409, image 469a1e19): `--overlay-paths` runs
+  on Batch and every clip's overlay now carries the whole paths. The flag writes INTO
+  `overlay.mp4` (it implies `--overlay`); a job writes no separate `overlay_paths.mp4`,
+  unlike local `path_overlay.py`.
 - Seen on that clip: many paths in the shower zigzag between neighbouring streaks.
   That is finding 5 (tracks hopping), now visible directly, which contact sheets
   could not show. So this is also the path view finding 5 asked for, as a video.
+
+**14. (2026-11-20) Training on real verified firebrands: far fewer false tracks, recall
+unchanged.** Closes the open item from 10-23 (`--real-positives` was submitted then and
+never scored). Job fb-train-20261120-140012, 65.7 min, image rebuilt first (digest
+469a1e19); `train -- --force --real-positives`, mask v3, 30 epochs, best val pixel-F1
+0.604.
+- Same held-out eval as the 11-07 model, the same 154 firebrand-free frames, and an
+  identical classical baseline (det P 0.588 / R 0.899), so the two runs compare directly.
+- At each model's own operating threshold: learned detection precision 0.123 -> 0.208 with
+  recall unchanged (0.875 -> 0.878); predicted tracks on the eval clip 321 -> 148 against
+  14 real ones; track recall identical at 0.786 both times, equal to classical.
+- On the threshold sweep: P 0.198 -> 0.525, F1 0.322 -> 0.656 (at 0.8 and 0.6).
+- **False tracks per 100 real firebrand-free frames: 16.88 -> 4.55.** Measured on real
+  footage, so the most trustworthy number here. The threshold rule ("lowest within 1.0
+  false tracks per 100 empty frames") picked 0.6, down from 0.8: the model can be run more
+  openly for the same emptiness.
+- The model still does not beat the classical detector on detection precision (0.208 vs
+  0.588). The gap narrowed; it did not close.
+- The effect on real tagged firebrands was measured the same day and is a REGRESSION:
+  finding 15. Read it before using this model.
+
+**15. (2026-11-20) The 11-20 model's tags are worse at a tight match, a wash at a loose
+one, and 13% more numerous: rolled back.**
+Answers finding 14's open question. Tag job fb-tag-20261120-153409 (2.12 h, ~$1.50, 10
+clips, `--force --overlay-paths`, model `runs/streak/best.pt`, threshold 0.6). Both tag
+sets were scored today by the same `evaluate_tags.py`, on the same machine, against the
+same verified classical tracks and the same hand `reject.txt` files; only the tags differ
+(old = bucket `work/tags_20261120`, the 11-07 model at threshold 0.8).
+- Held-out frames (1,323 frames, 11,188 verified tracks), recall of verified tracks:
+  at 5 px **0.382 -> 0.355** (recovered 4,270 -> 3,970), at 15 px **0.582 -> 0.592**
+  (6,517 -> 6,627). The baseline reproduces the 38.2% / 58.2% already recorded in the
+  lab's results table, so the two runs line up with the project's history.
+- So the model is NOT seeing fewer embers: at a loose match it finds 110 more. Its boxes
+  sit further from the verified centres, the same effect finding 10 saw when merged boxes
+  centre on the whole streak. What is clearly worse is the tight-match score and the
+  amount of unmatched output.
+- At 5 px, **0 of 10 clips improved**, on held-out or all frames; per-clip held-out deltas
+  run -0.004 (clip11) to -0.056 (clip10), so that part is not noise.
+- All frames (5,329 frames, 40,628 verified tracks), 5 px: 0.411 -> 0.379; model tracks
+  50,854 -> 57,375, confirmed 1,484 -> 1,364. Same direction on frames the new model
+  trained on, so the 5 px drop is not an artefact of the held-out split.
+- Model tracks +12.7% while confirmed fell 3.4%, so precision almost certainly fell too
+  (the model-only tracks are unreviewed, so precision stays a range, 0.060 -> 0.052 low).
+  That is the opposite of what finding 14's empty-frame number predicted (16.88 -> 4.55).
+- NOT measured: box coverage, the metric finding 13 used (66.3% for the 11-07 tags). It
+  came from a one-off analysis in `work/recall_review/`, not from a tool in the repo, so
+  there is no box-coverage figure for the 11-20 tags. That is the measurement that would
+  settle this properly; `evaluate_tags.py` has no such mode.
+- Confounded by threshold, deliberately: each job ran at its own model's operating point
+  (0.8 old, 0.6 new), so this is the model+threshold that would actually ship, and it does
+  not separate the two. Separating them needs another tag job (~2 h, ~$1.50), because the
+  per-detection score is written to NEITHER `detections.csv` nor `candidates.csv`, so a
+  threshold cannot be re-applied offline. Adding that column would make every future
+  threshold study free.
+- Metric note: the 66.3% in finding 13 is *box coverage* of verified held-out tracks, a
+  different quantity from `evaluate_tags.py`'s `recall_vs_verified` (0.382 for those same
+  tags). The before/after above is like-for-like; neither side is comparable to 66.3%.
+- Standing lesson, now in both directions: the synthetic and empty-frame evals do not
+  predict field recall, and the threshold rule derived from them ("lowest within 1.0 false
+  tracks per 100 empty frames") picked a worse operating point. Score a model with
+  `evaluate_tags.py` against verified tracks before shipping its tags.
+- Acted on the same day: bucket `work/tags` was restored to the 11-07 set from
+  `work/tags_20261120`, and the retrain's tags archived at `work/tags_retrain_20261120`
+  (10,313 objects, kept as the evidence for this finding). Noticed while restoring: a tag
+  set's `done.json` records the model as the path `runs/streak/best.pt`, which every
+  `--force` retrain overwrites, so the restored 11-07 tags claim the same path as the
+  11-20 ones. Only `threshold` (0.8 vs 0.6) distinguishes them. Write the run name or
+  image digest into `done.json` instead.
 
 ## Pipeline (as implemented in firebrand-kit)
 

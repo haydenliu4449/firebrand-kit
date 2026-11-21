@@ -22,8 +22,13 @@ need_job() { [[ -n "${JOB}" ]] || die "Usage: $0 ${CMD} JOB_NAME   (names: $0 li
 
 case "${CMD}" in
   list)
-    gc batch jobs list --location "${LOCATION}" --sort-by=~createTime --limit=15 \
-      --format="table(name.basename():label=JOB, status.state:label=STATE, createTime.date('%Y-%m-%d %H:%M'):label=CREATED, status.runDuration:label=RAN)"
+    # No --limit here: gcloud applies it BEFORE the client-side --sort-by, so in this
+    # project (which also holds the lab's elmfire/FDS/WindNinja jobs) it fetched an
+    # arbitrary 15 and sorted only those -- on 2026-11-20 it hid a train job that had
+    # just succeeded. Fetch all, sort newest first, then cut. LIST_ROWS = data rows.
+    gc batch jobs list --location "${LOCATION}" --sort-by=~createTime \
+      --format="table(name.basename():label=JOB, status.state:label=STATE, createTime.date('%Y-%m-%d %H:%M'):label=CREATED, status.runDuration:label=RAN)" \
+      | head -n "$(( ${LIST_ROWS:-15} + 1 ))"
     ;;
   running)
     out=$(gc batch jobs list --location "${LOCATION}" \
